@@ -40,6 +40,20 @@ export interface StrategyHit {
   evidence: Record<string, number | string | boolean>
 }
 
+/**
+ * Per-gate diagnosis of one screening pass — powers the CLI's tiered report
+ * (严格命中 vs 近邻候选). `matched` is true exactly when `screen()` would
+ * return a hit; `gates` is the strategy-specific condition breakdown;
+ * `failedGates` lists the gates that did not pass.
+ */
+export interface StrategyDiagnosis {
+  matched: boolean
+  gates: Record<string, boolean>
+  failedGates: string[]
+  /** Quantified metrics behind the gates (same fields as hit evidence; missing metrics are null). */
+  metrics: Record<string, number | string | boolean | null>
+}
+
 /** A screening strategy: pure function from (stock, series, params) to hit-or-null. */
 export interface Strategy {
   readonly id: string
@@ -48,6 +62,12 @@ export interface Strategy {
   /** Parameter table; also exposed through the a_share_list_strategies tool. */
   readonly paramDocs: ParamDocs
   screen(input: StrategyScreenInput, params: StrategyParams): StrategyHit | null
+  /**
+   * Optional per-gate diagnosis, used by the CLI to report why a stock did not
+   * match (and to surface near-miss candidates). Returns null when the stock
+   * cannot be evaluated at all (e.g. too few bars).
+   */
+  diagnose?(input: StrategyScreenInput, params: StrategyParams): StrategyDiagnosis | null
 }
 
 /** Registry with loud failure on duplicate ids, unknown strategies, and bad params. */

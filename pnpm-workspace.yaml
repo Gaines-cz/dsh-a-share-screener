@@ -1,0 +1,4 @@
+# pnpm 11 构建脚本审批: esbuild 的 postinstall 只是无害的自检脚本,
+# 允许它以消除每次 install 的 ERR_PNPM_IGNORED_BUILDS 警告。
+allowBuilds:
+  esbuild: true

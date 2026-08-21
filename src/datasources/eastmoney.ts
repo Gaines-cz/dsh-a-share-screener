@@ -86,43 +86,53 @@ function mergeBars(existing: Bar[], incoming: Bar[]): Bar[] {
 }
 
 /**
+ * Fetch the full A-share stock list from the Eastmoney clist endpoint (all
+ * boards, BSE included; universe filtering happens later). Also serves the
+ * sina/tencent adapters, which have no listing-date-bearing list endpoint of
+ * their own.
+ */
+export async function fetchEastmoneyStockList(limiter: RateLimiter, signal: AbortSignal): Promise<StockMeta[]> {
+  const out = new Map<string, StockMeta>()
+  const pageSize = 100
+  let page = 1
+  for (;;) {
+    if (signal.aborted) throw new Error('aborted')
+    const json = await fetchListPage(page, pageSize, limiter, signal)
+    const diff = json.data?.diff
+    const entries = Array.isArray(diff) ? diff : Object.values(diff ?? {})
+    if (entries.length === 0) break
+    for (const entry of entries) {
+      const code = String(entry.f12 ?? '')
+      const board = boardFromCode(code)
+      if (!board || !/^\d{6}$/.test(code)) continue
+      out.set(code, {
+        code,
+        fullCode: `${code}.${exchangeSuffix(code)}`,
+        name: String(entry.f14 ?? ''),
+        board,
+        listDate: normalizeDate(entry.f26),
+      })
+    }
+    const total = json.data?.total
+    // Never rely on `total`: when it is missing or stale the universe would be
+    // silently truncated to the first page. Stop only on a short page or the
+    // defensive page cap, and fall back to `total` only when it is plausibly
+    // larger than what we have collected.
+    if (entries.length < pageSize) break
+    if (total !== undefined && total > 0 && out.size >= total) break
+    if (page >= MAX_LIST_PAGES) break
+    page++
+  }
+  return [...out.values()]
+}
+
+/**
  * Build the Eastmoney data source, binding it to the shared rate limiter so
  * callers never pass request-budget plumbing around.
  */
 export function createEastmoneyDataSource(limiter: RateLimiter): DataSource {
   async function listStocks(signal: AbortSignal): Promise<StockMeta[]> {
-    const out = new Map<string, StockMeta>()
-    const pageSize = 100
-    let page = 1
-    for (;;) {
-      if (signal.aborted) throw new Error('aborted')
-      const json = await fetchListPage(page, pageSize, limiter, signal)
-      const diff = json.data?.diff
-      const entries = Array.isArray(diff) ? diff : Object.values(diff ?? {})
-      if (entries.length === 0) break
-      for (const entry of entries) {
-        const code = String(entry.f12 ?? '')
-        const board = boardFromCode(code)
-        if (!board || !/^\d{6}$/.test(code)) continue
-        out.set(code, {
-          code,
-          fullCode: `${code}.${exchangeSuffix(code)}`,
-          name: String(entry.f14 ?? ''),
-          board,
-          listDate: normalizeDate(entry.f26),
-        })
-      }
-      const total = json.data?.total
-      // Never rely on `total`: when it is missing or stale the universe would be
-      // silently truncated to the first page. Stop only on a short page or the
-      // defensive page cap, and fall back to `total` only when it is plausibly
-      // larger than what we have collected.
-      if (entries.length < pageSize) break
-      if (total !== undefined && total > 0 && out.size >= total) break
-      if (page >= MAX_LIST_PAGES) break
-      page++
-    }
-    return [...out.values()]
+    return fetchEastmoneyStockList(limiter, signal)
   }
 
   /**
