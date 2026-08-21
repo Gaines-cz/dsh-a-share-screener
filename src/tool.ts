@@ -4,6 +4,7 @@
  * @module a-share-screener/tool
  */
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
+import type { RateLimiter } from './http.js'
 import type { ScreenResultView, ScreenerConfig, ScreenerHost } from './screener.js'
 import { runScreen } from './screener.js'
 import type { StrategyRegistry } from './strategies/registry.js'
@@ -12,6 +13,8 @@ interface ToolDeps {
   host: ScreenerHost
   config: ScreenerConfig
   registry: StrategyRegistry
+  /** Process-lifetime limiter shared by every scan (one rate budget per plugin). */
+  limiter: RateLimiter
 }
 
 /** Human/model-readable text report from a canonical scan result. */
@@ -116,10 +119,13 @@ export function createScreenTool(deps: ToolDeps): ToolDefinition {
       schema: outputSchema,
       render: (_args, value) => [{ type: 'text', text: renderReport(value as ScreenResultView) }],
     },
-    timeoutMs: 1_800_000,
-    isConcurrencySafe: () => true,
+    timeoutMs: deps.config.scanTimeoutMs,
+    // A scan is heavy (minutes) and shares the disk cache and the outbound
+    // rate budget with every other scan; parallel runs would race cache
+    // writes and multiply data-source load. Serialize tool calls instead.
+    isConcurrencySafe: () => false,
     async execute(args, exec) {
-      return runScreen(deps.host, deps.config, deps.registry, {
+      return runScreen(deps.host, deps.config, deps.registry, deps.limiter, {
         strategyId: args.strategy,
         params: args.params === undefined ? undefined : (args.params as Record<string, unknown>),
         refresh: args.refresh ?? false,

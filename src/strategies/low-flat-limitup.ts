@@ -57,6 +57,7 @@ export const lowFlatLimitUpStrategy: Strategy = {
       default: 730,
       min: 120,
       max: 3000,
+      integer: true,
       description: 'Bar count for the historical-low percentile window (~3 years).',
     },
     maxPercentile: {
@@ -71,6 +72,7 @@ export const lowFlatLimitUpStrategy: Strategy = {
       default: 30,
       min: 10,
       max: 250,
+      integer: true,
       description: 'Bar count for the flat-base window.',
     },
     maxFlatRangeChange: {
@@ -92,6 +94,7 @@ export const lowFlatLimitUpStrategy: Strategy = {
       default: 120,
       min: 20,
       max: 500,
+      integer: true,
       description: 'Bars back to search for the volume-heavy limit-up day (~6 months).',
     },
     minVolumeSurge: {
@@ -113,6 +116,7 @@ export const lowFlatLimitUpStrategy: Strategy = {
       default: 5,
       min: 3,
       max: 30,
+      integer: true,
       description: 'Bar count for the recent (cooldown) volume average.',
     },
     minBars: {
@@ -120,6 +124,7 @@ export const lowFlatLimitUpStrategy: Strategy = {
       default: 240,
       min: 60,
       max: 3000,
+      integer: true,
       description: 'Minimum bar count to evaluate a stock at all.',
     },
   },

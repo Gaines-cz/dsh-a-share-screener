@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runScreen, type ScreenerConfig, type ScreenerHost } from './screener.js'
 import { eastmoneyDailyBars, eastmoneyListStocks } from './datasources/eastmoney.js'
 import { tencentDailyBars } from './datasources/tencent.js'
+import { RateLimiter } from './http.js'
 import { StrategyRegistry } from './strategies/registry.js'
 import { lowFlatLimitUpStrategy } from './strategies/low-flat-limitup.js'
 import type { Bar, StockMeta } from './types.js'
@@ -86,8 +87,19 @@ function config(cacheDir: string, overrides: Partial<ScreenerConfig> = {}): Scre
     excludeST: true,
     excludeBSE: true,
     minListDays: 365,
+    scanTimeoutMs: 3_600_000,
     ...overrides,
   }
+}
+
+const fastLimiter = (): RateLimiter => new RateLimiter(600_000)
+
+async function scan(
+  cacheDir: string,
+  cfg: ScreenerConfig,
+  args: { strategyId: string; params?: unknown; refresh?: boolean; signal: AbortSignal },
+): Promise<ReturnType<typeof runScreen>> {
+  return runScreen(noTokenHost, cfg, registry(), fastLimiter(), args)
 }
 
 beforeEach(() => {
@@ -109,10 +121,7 @@ describe('runScreen (eastmoney fallback path)', () => {
     mockedBars.mockResolvedValue(fixtureBars())
 
     const signal = new AbortController().signal
-    const result = await runScreen(noTokenHost, config(dir), registry(), {
-      strategyId: 'low_flat_limit_up',
-      signal,
-    })
+    const result = await scan(dir, config(dir), { strategyId: 'low_flat_limit_up', signal })
 
     expect(result.dataSource).toBe('eastmoney')
     expect(result.tokenConfigured).toBe(false)
@@ -126,10 +135,7 @@ describe('runScreen (eastmoney fallback path)', () => {
 
     // Second run: cache is fresh (fixture tail = today), so no refetch.
     mockedBars.mockClear()
-    const again = await runScreen(noTokenHost, config(dir), registry(), {
-      strategyId: 'low_flat_limit_up',
-      signal,
-    })
+    const again = await scan(dir, config(dir), { strategyId: 'low_flat_limit_up', signal })
     expect(again.matched).toBe(1)
     expect(again.stocksFetched).toBe(0)
     expect(mockedBars).not.toHaveBeenCalled()
@@ -140,9 +146,34 @@ describe('runScreen (eastmoney fallback path)', () => {
     mockedList.mockResolvedValue([stock('600001', '好公司', 'main', '20100101')])
     mockedBars.mockResolvedValueOnce(fixtureBars())
     const signal = new AbortController().signal
-    await runScreen(noTokenHost, config(dir), registry(), { strategyId: 'low_flat_limit_up', signal })
+    await scan(dir, config(dir), { strategyId: 'low_flat_limit_up', signal })
 
-    // Age only the cached tail beyond the freshness threshold.
+    // Age both the tail date and the fetchedAt stamp beyond the freshness rules.
+    const barsFile = join(dir, 'eastmoney', 'bars', '600001.SH.json')
+    const { writeFile } = await import('node:fs/promises')
+    const cached = JSON.parse(await (await import('node:fs/promises')).readFile(barsFile, 'utf8')) as {
+      fetchedAt?: string
+      bars: [string, number, number, number, number, number, number | null][]
+    }
+    cached.bars[cached.bars.length - 1]![0] = '20200101'
+    cached.fetchedAt = '20200101'
+    await writeFile(barsFile, JSON.stringify(cached), 'utf8')
+
+    mockedBars.mockClear()
+    mockedBars.mockResolvedValue(fixtureBars())
+    const refreshed = await scan(dir, config(dir), { strategyId: 'low_flat_limit_up', signal })
+    expect(refreshed.matched).toBe(1)
+    expect(mockedBars).toHaveBeenCalled()
+  })
+
+  it('refetches once per day at most: a second same-day scan after a stale refresh stays cached', async () => {
+    const dir = await tempDir()
+    mockedList.mockResolvedValue([stock('600001', '好公司', 'main', '20100101')])
+    mockedBars.mockResolvedValue(fixtureBars())
+    const signal = new AbortController().signal
+    await scan(dir, config(dir), { strategyId: 'low_flat_limit_up', signal })
+
+    // Age the tail so the file is stale, but keep fetchedAt = today.
     const barsFile = join(dir, 'eastmoney', 'bars', '600001.SH.json')
     const { writeFile } = await import('node:fs/promises')
     const cached = JSON.parse(await (await import('node:fs/promises')).readFile(barsFile, 'utf8')) as {
@@ -152,13 +183,10 @@ describe('runScreen (eastmoney fallback path)', () => {
     await writeFile(barsFile, JSON.stringify(cached), 'utf8')
 
     mockedBars.mockClear()
-    mockedBars.mockResolvedValue(fixtureBars())
-    const refreshed = await runScreen(noTokenHost, config(dir), registry(), {
-      strategyId: 'low_flat_limit_up',
-      signal,
-    })
-    expect(refreshed.matched).toBe(1)
-    expect(mockedBars).toHaveBeenCalled()
+    const again = await scan(dir, config(dir), { strategyId: 'low_flat_limit_up', signal })
+    // Stale tail but already attempted today → no network call.
+    expect(mockedBars).not.toHaveBeenCalled()
+    expect(again.stocksFetched).toBe(0)
   })
 })
 
@@ -169,7 +197,7 @@ describe('runScreen failure modes', () => {
     mockedBars.mockRejectedValue(new Error('socket reset'))
     mockedTencent.mockResolvedValue(fixtureBars())
 
-    const result = await runScreen(noTokenHost, config(dir), registry(), {
+    const result = await scan(dir, config(dir), {
       strategyId: 'low_flat_limit_up',
       signal: new AbortController().signal,
     })
@@ -179,7 +207,7 @@ describe('runScreen failure modes', () => {
 
     // Second run: tencent cache dir holds the file and stays fresh, so no refetch.
     mockedTencent.mockClear()
-    const again = await runScreen(noTokenHost, config(dir), registry(), {
+    const again = await scan(dir, config(dir), {
       strategyId: 'low_flat_limit_up',
       signal: new AbortController().signal,
     })
@@ -199,7 +227,7 @@ describe('runScreen failure modes', () => {
     mockedBars.mockRejectedValue(new Error('socket reset'))
     mockedTencent.mockResolvedValue(fixtureBars())
 
-    const result = await runScreen(noTokenHost, config(dir), registry(), {
+    const result = await scan(dir, config(dir), {
       strategyId: 'low_flat_limit_up',
       signal: new AbortController().signal,
     })
@@ -210,23 +238,37 @@ describe('runScreen failure modes', () => {
     expect(result.notes.some((note) => note.includes('tencent for 5'))).toBe(true)
   })
 
-  it('throws with both causes when every kline source fails', async () => {
+  it('skips stocks whose klines fail on every source, counting them as skipped', async () => {
     const dir = await tempDir()
     mockedList.mockResolvedValue([stock('600001', '好公司', 'main', '20100101')])
     mockedBars.mockRejectedValue(new Error('east down'))
     mockedTencent.mockRejectedValue(new Error('tencent down'))
+    const result = await scan(dir, config(dir), {
+      strategyId: 'low_flat_limit_up',
+      signal: new AbortController().signal,
+    })
+    expect(result.scanned).toBe(0)
+    expect(result.matched).toBe(0)
+    expect(result.skipped['kline-fetch-failed']).toBe(1)
+  })
+
+  it('aborts the scan when kline failures exceed 10% of the universe', async () => {
+    const dir = await tempDir()
+    const universe = Array.from({ length: 100 }, (_, i) =>
+      stock(`600${String(i + 1).padStart(3, '0')}`, `公司${i}`, 'main', '20100101'),
+    )
+    mockedList.mockResolvedValue(universe)
+    mockedBars.mockRejectedValue(new Error('outage'))
+    mockedTencent.mockRejectedValue(new Error('outage'))
     await expect(
-      runScreen(noTokenHost, config(dir), registry(), {
-        strategyId: 'low_flat_limit_up',
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toThrow(/all kline sources failed .*east down \| tencent: tencent down/)
+      scan(dir, config(dir), { strategyId: 'low_flat_limit_up', signal: new AbortController().signal }),
+    ).rejects.toThrow(/aborting scan: kline fetch failed for 100/)
   })
 
   it('throws loud guidance for explicit tushare without a token', async () => {
     const dir = await tempDir()
     await expect(
-      runScreen(noTokenHost, config(dir, { dataSource: 'tushare' }), registry(), {
+      scan(dir, config(dir, { dataSource: 'tushare' }), {
         strategyId: 'low_flat_limit_up',
         signal: new AbortController().signal,
       }),
@@ -236,21 +278,29 @@ describe('runScreen failure modes', () => {
   it('throws with the available strategies for an unknown id', async () => {
     const dir = await tempDir()
     await expect(
-      runScreen(noTokenHost, config(dir), registry(), {
-        strategyId: 'moon_phase',
-        signal: new AbortController().signal,
-      }),
+      scan(dir, config(dir), { strategyId: 'moon_phase', signal: new AbortController().signal }),
     ).rejects.toThrow(/Available: low_flat_limit_up/)
   })
 
   it('rejects bad strategy params loudly', async () => {
     const dir = await tempDir()
     await expect(
-      runScreen(noTokenHost, config(dir), registry(), {
+      scan(dir, config(dir), {
         strategyId: 'low_flat_limit_up',
         params: { minVolumeSurge: 0.1 },
         signal: new AbortController().signal,
       }),
     ).rejects.toThrow(/>=/)
+  })
+
+  it('rejects fractional bar-count params loudly', async () => {
+    const dir = await tempDir()
+    await expect(
+      scan(dir, config(dir), {
+        strategyId: 'low_flat_limit_up',
+        params: { percentileWindowBars: 729.5 },
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow(/must be an integer/)
   })
 })

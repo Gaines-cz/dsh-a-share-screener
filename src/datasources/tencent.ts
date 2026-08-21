@@ -38,7 +38,9 @@ function parseRows(rows: unknown[]): Bar[] {
     const high = Number(row[3])
     const low = Number(row[4])
     const volume = Number(row[5])
-    if (date.length !== 8 || ![open, close, high, low, volume].every(Number.isFinite)) continue
+    // Prices must be strictly positive; volume may be 0 on suspended days.
+    if (date.length !== 8 || ![open, close, high, low].every((v) => Number.isFinite(v) && v > 0)) continue
+    if (!Number.isFinite(volume) || volume < 0) continue
     bars.push({ date, open, high, low, close, volume, preClose: null })
   }
   return bars

@@ -83,6 +83,7 @@ Set in your profile's `cordis.patch.yml` (all fields have defaults):
         dataSource: auto
         requestsPerMinute: 200
         historyBars: 800
+        scanTimeoutMs: 1800000
         excludeST: true
         excludeBSE: true
         minListDays: 365

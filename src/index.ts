@@ -9,6 +9,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
+import { RateLimiter } from './http.js'
 import type { ScreenerConfig, ScreenerHost } from './screener.js'
 import { lowFlatLimitUpStrategy } from './strategies/low-flat-limitup.js'
 import { StrategyRegistry } from './strategies/registry.js'
@@ -35,6 +36,8 @@ export interface Config {
   excludeBSE: boolean
   /** Exclude stocks listed fewer than this many days. */
   minListDays: number
+  /** Cooperative timeout budget for one full scan, milliseconds. */
+  scanTimeoutMs: number
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -46,6 +49,7 @@ export const Config: Schema<Config> = Schema.object({
   excludeST: Schema.boolean().default(true),
   excludeBSE: Schema.boolean().default(true),
   minListDays: Schema.number().min(0).max(5000).default(365),
+  scanTimeoutMs: Schema.number().min(60_000).max(7_200_000).default(1_800_000),
 })
 
 interface CredentialsLike {
@@ -82,10 +86,14 @@ function createHost(ctx: Context): ScreenerHost {
 export function apply(ctx: Context, config: Config): void {
   const registry = new StrategyRegistry()
   registry.register(lowFlatLimitUpStrategy)
+  // One rate budget for the whole plugin lifetime: concurrent scans would
+  // otherwise multiply outbound requests against the data source.
+  const limiter = new RateLimiter(config.requestsPerMinute)
   const deps = {
     host: createHost(ctx),
     config: config as ScreenerConfig,
     registry,
+    limiter,
   }
   ctx.tools.register(createListStrategiesTool(deps))
   ctx.tools.register(createScreenTool(deps))

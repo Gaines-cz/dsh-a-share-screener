@@ -83,6 +83,7 @@ token 在每次扫描时解析，轮换无需重启。没有 token 时插件自�
         dataSource: auto
         requestsPerMinute: 200
         historyBars: 800
+        scanTimeoutMs: 1800000
         excludeST: true
         excludeBSE: true
         minListDays: 365

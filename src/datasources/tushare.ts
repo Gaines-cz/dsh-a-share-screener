@@ -60,6 +60,9 @@ async function callApi(
       },
       limiter: deps.limiter,
       signal,
+      // Retry lives here (rate-limit aware), not in fetchJson: nesting both
+      // would multiply requests 4x and burn rate-limiter slots.
+      retries: 0,
     })) as TushareResponse
     if (json.code === 0 && json.data) {
       const index = new Map<string, number>()
@@ -93,7 +96,8 @@ export async function tushareListStocks(deps: TushareDeps, signal: AbortSignal):
   const out: StockMeta[] = []
   for (const row of rows) {
     const fullCode = String(row.ts_code ?? '')
-    const code = fullCode.split('.')[0] ?? ''
+    if (!/^\d{6}\.(SH|SZ|BJ)$/.test(fullCode)) continue
+    const code = fullCode.split('.')[0]!
     const board = boardFromCode(code)
     if (!board) continue
     out.push({
@@ -137,18 +141,27 @@ function mapDailyRow(row: Record<string, unknown>): DailyRow | null {
   const high = num(row.high)
   const low = num(row.low)
   const preClose = num(row.pre_close)
+  const fullCode = String(row.ts_code ?? '')
+  // Validate before anything downstream can use the code as a file name.
+  if (!/^\d{6}\.(SH|SZ|BJ)$/.test(fullCode)) return null
+  // Prices must be strictly positive (a zero close poisons the return index).
   if (
     date.length !== 8 ||
     close === null ||
+    close <= 0 ||
     volume === null ||
+    volume < 0 ||
     open === null ||
+    open <= 0 ||
     high === null ||
-    low === null
+    high <= 0 ||
+    low === null ||
+    low <= 0
   ) {
     return null
   }
   return {
-    fullCode: String(row.ts_code ?? ''),
+    fullCode,
     bar: { date, open, high, low, close, volume, preClose },
   }
 }

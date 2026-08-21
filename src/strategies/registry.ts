@@ -14,6 +14,8 @@ export type ParamDoc = {
   description: string
   min?: number
   max?: number
+  /** Bar-count parameters must be whole numbers; fractional values silently break index math. */
+  integer?: boolean
 }
 
 export type ParamDocs = Record<string, ParamDoc>
@@ -98,6 +100,9 @@ export class StrategyRegistry {
       if (doc.type === 'number') {
         if (typeof value !== 'number' || !Number.isFinite(value)) {
           throw new Error(`param '${key}' for strategy '${id}' must be a number`)
+        }
+        if (doc.integer && !Number.isInteger(value)) {
+          throw new Error(`param '${key}' for strategy '${id}' must be an integer`)
         }
         if (doc.min !== undefined && value < doc.min) {
           throw new Error(`param '${key}' for strategy '${id}' must be >= ${doc.min}`)

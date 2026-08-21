@@ -11,7 +11,11 @@ export class RateLimiter {
   private nextAt = 0
   private queue: Promise<unknown> = Promise.resolve()
 
-  constructor(readonly requestsPerMinute: number) {}
+  constructor(readonly requestsPerMinute: number) {
+    if (!Number.isFinite(requestsPerMinute) || requestsPerMinute <= 0) {
+      throw new Error(`requestsPerMinute must be a positive number, got ${requestsPerMinute}`)
+    }
+  }
 
   /** Wait for this request's slot. Rejects when `signal` aborts while waiting. */
   acquire(signal: AbortSignal): Promise<void> {

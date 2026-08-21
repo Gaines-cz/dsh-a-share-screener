@@ -2,6 +2,7 @@
  * Disk cache: atomic JSON persistence under a resolved cache directory.
  * @module a-share-screener/cache
  */
+import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -31,7 +32,7 @@ export async function readJson<T>(file: string): Promise<T | undefined> {
 /** Write JSON atomically (tmp file + rename), creating parent directories. */
 export async function writeJson(file: string, value: unknown): Promise<void> {
   await mkdir(dirname(file), { recursive: true })
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`
   await writeFileSafe(tmp, JSON.stringify(value))
   await rename(tmp, file)
 }

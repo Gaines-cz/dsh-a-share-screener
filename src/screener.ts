@@ -29,6 +29,8 @@ export interface ScreenerConfig {
   excludeST: boolean
   excludeBSE: boolean
   minListDays: number
+  /** Cooperative tool timeout budget for one scan, milliseconds. */
+  scanTimeoutMs: number
 }
 
 /** Host services the screener needs (implemented by the plugin entry). */
@@ -76,12 +78,21 @@ export const DISCLAIMER =
   'past patterns do not predict future returns. Verify fundamentals and do your own research before any decision.'
 
 interface StocksCache {
+  /** Local YYYYMMDD of the fetch, so freshness compares in one timezone. */
   fetchedAt: string
   stocks: StockMeta[]
 }
 
 interface BarsFile {
   code: string
+  /** Local YYYYMMDD when this file was last written; gates same-day refetches. */
+  fetchedAt?: string
+  /**
+   * The window start (YYYYMMDD) this file was fetched for. Backfill happens
+   * only when the requested window moved EARLIER than this — a young stock
+   * whose first bar is naturally after the window must not refetch every scan.
+   */
+  startDate?: string
   bars: BarTuple[]
 }
 
@@ -115,9 +126,37 @@ function dateMinusDays(ymdStr: string, days: number): string {
   return ymd(date)
 }
 
-/** Calendar start date that safely covers `historyBars` trading days. */
+/** Calendar start date that safely covers `historyBars` trading days. A-shares
+ * trade ~243 days/year (365/243 ≈ 1.5), so 1.5x plus a 45-day buffer is
+ * required to never come up short when the requested window is wide. */
 function historyStartDate(historyBars: number): string {
-  return dateMinusDays(todayYmd(), Math.ceil((historyBars * 7) / 5) + 30)
+  return dateMinusDays(todayYmd(), Math.ceil(historyBars * 1.5) + 45)
+}
+
+/**
+ * The latest day on which the market could have printed bars: today when it is
+ * a weekday, otherwise the preceding Friday. Weekend scans must not trigger a
+ * pointless whole-market refresh against Friday data.
+ */
+function expectedLastTradingDay(): string {
+  const now = new Date()
+  const day = now.getDay()
+  if (day === 0) return dateMinusDays(ymd(now), 2) // Sunday → Friday
+  if (day === 6) return dateMinusDays(ymd(now), 1) // Saturday → Friday
+  return ymd(now)
+}
+
+/**
+ * Whether cached bars are worth refreshing. The tail must be older than the
+ * expected last trading day AND the file must not already have been (re)fetched
+ * today — the second clause turns repeated same-day scans into cache hits while
+ * still fetching today's post-close bar on the first scan of the day.
+ */
+function isStale(fileData: BarsFile): boolean {
+  const lastDate = fileData.bars[fileData.bars.length - 1]?.[0] ?? ''
+  if (lastDate >= expectedLastTradingDay()) return false
+  if ((fileData.fetchedAt ?? '') >= todayYmd()) return false
+  return true
 }
 
 function isSt(name: string): boolean {
@@ -141,6 +180,7 @@ export async function runScreen(
   host: ScreenerHost,
   config: ScreenerConfig,
   registry: StrategyRegistry,
+  limiter: RateLimiter,
   args: ScreenArgs,
 ): Promise<ScreenResultView> {
   const startedAt = Date.now()
@@ -173,7 +213,6 @@ export async function runScreen(
   }
 
   const cacheDir = config.cacheDir ?? defaultCacheDir()
-  const limiter = new RateLimiter(config.requestsPerMinute)
   const signal = args.signal
   const skipped: Record<string, number> = {}
   const skip = (reason: string): void => {
@@ -184,12 +223,12 @@ export async function runScreen(
   const stocksFile = join(cacheDir, 'stocks.json')
   const today = todayYmd()
   let stocksCache = await readJson<StocksCache>(stocksFile)
-  if (args.refresh || !stocksCache || stocksCache.fetchedAt.slice(0, 8) < today) {
+  if (args.refresh || !stocksCache || (stocksCache.fetchedAt ?? '') < today) {
     const stocks =
       source === 'tushare'
         ? await tushareListStocks({ token: token!, limiter }, signal)
         : await eastmoneyListStocks(limiter, signal)
-    stocksCache = { fetchedAt: new Date().toISOString(), stocks }
+    stocksCache = { fetchedAt: today, stocks }
     await writeJson(stocksFile, stocksCache)
   }
   const stocks = stocksCache.stocks
@@ -244,34 +283,52 @@ export async function runScreen(
     for (const src of sources) {
       const file = join(cacheDir, src, 'bars', `${stock.fullCode}.json`)
       try {
-        let fileData = await readJson<BarsFile>(file)
-        if (!fileData || fileData.bars.length === 0) {
+        const fileData = await readJson<BarsFile>(file)
+        const backfill = fileData?.startDate !== undefined && fileData.startDate > startDate
+        let result: BarsFile
+        if (!fileData || backfill) {
+          // No file at all, or the requested window moved earlier: full fetch.
           const bars =
             src === 'eastmoney'
               ? await eastmoneyDailyBars(stock.fullCode, startDate, limiter, signal)
               : await tencentDailyBars(stock.fullCode, startDate, limiter, signal)
-          fileData = { code: stock.fullCode, bars: bars.map(toBarTuple) }
-          await writeJson(file, fileData)
+          result = { code: stock.fullCode, fetchedAt: today, startDate, bars: bars.map(toBarTuple) }
+          await writeJson(file, result)
           fetchedThisRun.add(stock.fullCode)
-        } else if (src === 'eastmoney') {
+        } else if (fileData.bars.length === 0) {
+          // Empty file (suspended/stopped): refetch at most once per day.
+          if (isStale(fileData)) {
+            const bars =
+              src === 'eastmoney'
+                ? await eastmoneyDailyBars(stock.fullCode, startDate, limiter, signal)
+                : await tencentDailyBars(stock.fullCode, startDate, limiter, signal)
+            result = { code: stock.fullCode, fetchedAt: today, startDate, bars: bars.map(toBarTuple) }
+            await writeJson(file, result)
+            fetchedThisRun.add(stock.fullCode)
+          } else {
+            result = fileData
+          }
+        } else if (src === 'eastmoney' && isStale(fileData)) {
           const refreshed = await refreshEastmoneyStock(stock.fullCode, fileData, startDate, limiter, signal)
           if (refreshed !== null) {
-            fileData = refreshed
-            await writeJson(file, fileData)
+            refreshed.fetchedAt = today
+            result = refreshed
+            await writeJson(file, result)
             fetchedThisRun.add(stock.fullCode)
+          } else {
+            result = fileData
           }
+        } else if (src === 'tencent' && isStale(fileData)) {
+          const bars = await tencentDailyBars(stock.fullCode, startDate, limiter, signal)
+          result = { code: stock.fullCode, fetchedAt: today, startDate, bars: bars.map(toBarTuple) }
+          await writeJson(file, result)
+          fetchedThisRun.add(stock.fullCode)
         } else {
-          const lastDate = fileData.bars[fileData.bars.length - 1]?.[0] ?? ''
-          if (lastDate !== '' && lastDate < dateMinusDays(todayYmd(), 2)) {
-            const bars = await tencentDailyBars(stock.fullCode, startDate, limiter, signal)
-            fileData = { code: stock.fullCode, bars: bars.map(toBarTuple) }
-            await writeJson(file, fileData)
-            fetchedThisRun.add(stock.fullCode)
-          }
+          result = fileData
         }
         klineSourceCounts[src] = (klineSourceCounts[src] ?? 0) + 1
         if (src === 'eastmoney') eastmoneyConsecutiveFailures = 0
-        return fileData
+        return result
       } catch (err) {
         if (signal.aborted) throw abortError()
         errors.push(`${src}: ${err instanceof Error ? err.message : String(err)}`)
@@ -288,19 +345,27 @@ export async function runScreen(
   let scanned = 0
   for (const stock of universe) {
     if (signal.aborted) throw abortError()
-    let fileData: BarsFile
-    if (tushareDeps !== undefined) {
-      const file = join(cacheDir, 'tushare', 'bars', `${stock.fullCode}.json`)
-      let data = await readJson<BarsFile>(file)
-      if (!data || data.bars.length === 0) {
-        const bars = await tushareDailyForStock(stock.fullCode, startDate, tushareDeps, signal)
-        data = { code: stock.fullCode, bars: bars.map(toBarTuple) }
-        await writeJson(file, data)
-        fetchedThisRun.add(stock.fullCode)
+    let fileData: BarsFile | null = null
+    try {
+      if (tushareDeps !== undefined) {
+        const file = join(cacheDir, 'tushare', 'bars', `${stock.fullCode}.json`)
+        let data = await readJson<BarsFile>(file)
+        const backfill = data?.startDate !== undefined && data.startDate > startDate
+        if (!data || data.bars.length === 0 || backfill) {
+          const bars = await tushareDailyForStock(stock.fullCode, startDate, tushareDeps, signal)
+          data = { code: stock.fullCode, fetchedAt: today, startDate, bars: bars.map(toBarTuple) }
+          await writeJson(file, data)
+          fetchedThisRun.add(stock.fullCode)
+        }
+        fileData = data
+      } else {
+        fileData = await acquireFreeBars(stock)
       }
-      fileData = data
-    } else {
-      fileData = await acquireFreeBars(stock)
+    } catch (err) {
+      if (signal.aborted) throw abortError()
+      skip('kline-fetch-failed')
+      host.log('warn', `kline fetch failed for ${stock.fullCode}: ${err instanceof Error ? err.message : String(err)}`)
+      continue
     }
     scanned++
     if (scanned % 200 === 0) {
@@ -312,6 +377,13 @@ export async function runScreen(
   }
   if (klineSourceCounts.tencent !== undefined) {
     notes.push(`klines served by tencent for ${klineSourceCounts.tencent} stock(s) (eastmoney unavailable)`)
+  }
+  const klineFailures = skipped['kline-fetch-failed'] ?? 0
+  if (klineFailures > Math.max(10, Math.floor(universe.length * 0.1))) {
+    throw new Error(
+      `aborting scan: kline fetch failed for ${klineFailures}/${universe.length} stocks — ` +
+        `likely a systemic data-source outage. Fix connectivity or the token, then retry.`,
+    )
   }
 
   candidates.sort((a, b) => a.code.localeCompare(b.code))
@@ -335,7 +407,16 @@ export async function runScreen(
  * Tushare incremental refresh: fetch by-trade-date bulk rows for every open
  * date newer than the merged state, merge them into the per-stock bar files,
  * and advance the state. One API call covers the whole market for one day.
+ *
+ * State advances only for dates that are (a) fully published (yesterday or
+ * older — today's rows may be partial until after the close, so today is
+ * refetched every scan until it becomes final) and (b) plausibly complete
+ * (>= MIN_MARKET_ROWS rows; a suspiciously small response indicates a row-cap
+ * truncation, in which case the date is merged but not finalized, so the next
+ * scan retries it). Idempotent merges make retries safe.
  */
+const MIN_MARKET_ROWS = 3000
+
 async function refreshTushareByDates(
   cacheDir: string,
   startDate: string,
@@ -357,12 +438,21 @@ async function refreshTushareByDates(
   const missing = calendar.dates.filter((date) => date > state.lastDate)
   if (missing.length === 0) return
   host.log('info', `tushare incremental: ${missing.length} new trade date(s) to merge`)
-  const touched = new Set<string>()
   let lastMerged = state.lastDate
   for (const date of missing) {
     if (signal.aborted) throw abortError()
     const rows = await tushareDailyForDate(date, deps, signal)
     if (rows.length === 0) continue
+    if (rows.length < MIN_MARKET_ROWS) {
+      if (date < today) {
+        host.log(
+          'warn',
+          `tushare daily(${date}) returned only ${rows.length} rows — possible row-cap truncation; merging but not finalizing this date`,
+        )
+      } else {
+        host.log('info', `tushare daily(${date}) returned ${rows.length} rows (intraday partial); merging, retried next scan`)
+      }
+    }
     const byFullCode = new Map<string, BarTuple[]>()
     for (const row of rows) {
       const list = byFullCode.get(row.fullCode) ?? []
@@ -373,12 +463,21 @@ async function refreshTushareByDates(
       const file = join(cacheDir, 'tushare', 'bars', `${fullCode}.json`)
       const existing = await readJson<BarsFile>(file)
       const merged = mergeTuples(existing?.bars ?? [], tuples)
-      await writeJson(file, { code: fullCode, bars: merged })
-      touched.add(fullCode)
+      const lastBefore = existing?.bars[existing.bars.length - 1]?.[0] ?? ''
+      const lastAfter = merged[merged.length - 1]?.[0] ?? ''
+      if (existing === undefined || merged.length !== existing.bars.length || lastAfter !== lastBefore) {
+        await writeJson(file, {
+          code: fullCode,
+          fetchedAt: today,
+          startDate: existing?.startDate ?? startDate,
+          bars: merged,
+        })
+        fetchedThisRun.add(fullCode)
+      }
     }
-    lastMerged = date
+    // Finalize only published, plausibly-complete dates strictly before today.
+    if (date < today && rows.length >= MIN_MARKET_ROWS) lastMerged = date
   }
-  for (const fullCode of touched) fetchedThisRun.add(fullCode)
   if (lastMerged > state.lastDate) {
     await writeJson(stateFile, { lastDate: lastMerged } satisfies TushareState)
   }
@@ -387,7 +486,8 @@ async function refreshTushareByDates(
 /**
  * Eastmoney per-stock refresh for stale cache files: fetch from 10 days before
  * the cached tail, verify the overlapping bars still match (back-adjustment
- * drift check), then append. Returns null when the file is fresh enough.
+ * drift check), then append. Returns null when the file needs no refresh;
+ * the caller gates freshness via {@link isStale}.
  */
 async function refreshEastmoneyStock(
   fullCode: string,
@@ -398,7 +498,6 @@ async function refreshEastmoneyStock(
 ): Promise<BarsFile | null> {
   const lastDate = fileData.bars[fileData.bars.length - 1]?.[0] ?? ''
   if (lastDate === '') return null
-  if (lastDate >= dateMinusDays(todayYmd(), 2)) return null
   const fetchFrom = dateMinusDays(lastDate, 10)
   const fresh = await eastmoneyDailyBars(fullCode, fetchFrom, limiter, signal)
   if (fresh.length === 0) return null
@@ -424,4 +523,4 @@ async function refreshEastmoneyStock(
 }
 
 /** Exported for tests. */
-export { mergeTuples, historyStartDate, isSt }
+export { mergeTuples, historyStartDate, isStale, isSt, expectedLastTradingDay, refreshTushareByDates }

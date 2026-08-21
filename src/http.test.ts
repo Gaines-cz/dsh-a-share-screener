@@ -7,13 +7,19 @@ afterEach(() => {
 
 describe('RateLimiter', () => {
   it('spreads request starts by the configured interval', async () => {
-    const limiter = new RateLimiter(6000) // one request per 10ms
+    const limiter = new RateLimiter(600) // one request per 100ms
     const controller = new AbortController()
     const start = Date.now()
     await limiter.acquire(controller.signal)
     await limiter.acquire(controller.signal)
     await limiter.acquire(controller.signal)
-    expect(Date.now() - start).toBeGreaterThanOrEqual(20)
+    // 2 waits of 100ms; generous lower bound for timer granularity under load.
+    expect(Date.now() - start).toBeGreaterThanOrEqual(190)
+  })
+
+  it('rejects non-positive rates at construction', () => {
+    expect(() => new RateLimiter(0)).toThrow(/positive/)
+    expect(() => new RateLimiter(-5)).toThrow(/positive/)
   })
 
   it('rejects waiting acquires on abort', async () => {

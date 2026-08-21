@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createListStrategiesTool, createScreenTool } from './tool.js'
+import { RateLimiter } from './http.js'
 import type { ScreenerConfig, ScreenerHost } from './screener.js'
 import { StrategyRegistry } from './strategies/registry.js'
 import { lowFlatLimitUpStrategy } from './strategies/low-flat-limitup.js'
@@ -15,10 +16,11 @@ const config: ScreenerConfig = {
   excludeST: true,
   excludeBSE: true,
   minListDays: 365,
+  scanTimeoutMs: 1_800_000,
 }
 const registry = new StrategyRegistry()
 registry.register(lowFlatLimitUpStrategy)
-const deps = { host, config, registry }
+const deps = { host, config, registry, limiter: new RateLimiter(600_000) }
 
 describe('tool construction', () => {
   it('builds both tools with valid DSL schemas (defineTool compiles them)', () => {

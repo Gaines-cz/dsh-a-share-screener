@@ -41,6 +41,9 @@ async function fetchListPage(
       return json
     } catch (err) {
       if (signal.aborted) throw err
+      // The remembered host may have died since; forget it so the next call
+      // re-probes every host instead of failing the first attempt forever.
+      if (host === workingListHost) workingListHost = undefined
       lastError = err
     }
   }
@@ -49,6 +52,8 @@ async function fetchListPage(
 
 /** All A-share boards (BSE included; universe filtering happens later). */
 const FS_ALL = 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048'
+/** Defensive page cap: the endpoint pages ~56 pages today; never loop unbounded. */
+const MAX_LIST_PAGES = 300
 
 interface ListEntry {
   f12?: string
@@ -91,7 +96,14 @@ export async function eastmoneyListStocks(
         listDate: normalizeDate(entry.f26),
       })
     }
-    if (out.size >= (json.data?.total ?? 0) || entries.length < pageSize) break
+    const total = json.data?.total
+    // Never rely on `total`: when it is missing or stale the universe would be
+    // silently truncated to the first page. Stop only on a short page or the
+    // defensive page cap, and fall back to `total` only when it is plausibly
+    // larger than what we have collected.
+    if (entries.length < pageSize) break
+    if (total !== undefined && total > 0 && out.size >= total) break
+    if (page >= MAX_LIST_PAGES) break
     page++
   }
   return [...out.values()]
@@ -129,7 +141,10 @@ export async function eastmoneyDailyBars(
     const high = Number(parts[3])
     const low = Number(parts[4])
     const volume = Number(parts[5])
-    if (date.length !== 8 || ![open, close, high, low, volume].every(Number.isFinite)) continue
+    // Prices must be strictly positive: a zero close would send the chained
+    // return index to 0 and poison every ratio-based condition with NaN.
+    if (date.length !== 8 || ![open, close, high, low].every((v) => Number.isFinite(v) && v > 0)) continue
+    if (!Number.isFinite(volume)) continue
     bars.push({ date, open, high, low, close, volume, preClose: null })
   }
   return bars.sort((a, b) => a.date.localeCompare(b.date))
