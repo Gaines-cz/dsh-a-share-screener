@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runScreen, type ScreenerConfig, type ScreenerHost } from './screener.js'
 import { eastmoneyDailyBars, eastmoneyListStocks } from './datasources/eastmoney.js'
+import { tencentDailyBars } from './datasources/tencent.js'
 import { StrategyRegistry } from './strategies/registry.js'
 import { lowFlatLimitUpStrategy } from './strategies/low-flat-limitup.js'
 import type { Bar, StockMeta } from './types.js'
@@ -13,8 +14,13 @@ vi.mock('./datasources/eastmoney.js', () => ({
   eastmoneyDailyBars: vi.fn(),
 }))
 
+vi.mock('./datasources/tencent.js', () => ({
+  tencentDailyBars: vi.fn(),
+}))
+
 const mockedList = vi.mocked(eastmoneyListStocks)
 const mockedBars = vi.mocked(eastmoneyDailyBars)
+const mockedTencent = vi.mocked(tencentDailyBars)
 
 const tempDirs: string[] = []
 
@@ -87,6 +93,7 @@ function config(cacheDir: string, overrides: Partial<ScreenerConfig> = {}): Scre
 beforeEach(() => {
   mockedList.mockReset()
   mockedBars.mockReset()
+  mockedTencent.mockReset()
 })
 
 describe('runScreen (eastmoney fallback path)', () => {
@@ -156,6 +163,66 @@ describe('runScreen (eastmoney fallback path)', () => {
 })
 
 describe('runScreen failure modes', () => {
+  it('falls back to tencent klines when eastmoney fails, with separate cache dirs', async () => {
+    const dir = await tempDir()
+    mockedList.mockResolvedValue([stock('600001', '好公司', 'main', '20100101')])
+    mockedBars.mockRejectedValue(new Error('socket reset'))
+    mockedTencent.mockResolvedValue(fixtureBars())
+
+    const result = await runScreen(noTokenHost, config(dir), registry(), {
+      strategyId: 'low_flat_limit_up',
+      signal: new AbortController().signal,
+    })
+    expect(result.matched).toBe(1)
+    expect(result.notes.some((note) => note.includes('tencent for 1'))).toBe(true)
+    expect(mockedTencent).toHaveBeenCalledWith('600001.SH', expect.any(String), expect.anything(), expect.anything())
+
+    // Second run: tencent cache dir holds the file and stays fresh, so no refetch.
+    mockedTencent.mockClear()
+    const again = await runScreen(noTokenHost, config(dir), registry(), {
+      strategyId: 'low_flat_limit_up',
+      signal: new AbortController().signal,
+    })
+    expect(again.matched).toBe(1)
+    expect(mockedTencent).not.toHaveBeenCalled()
+  })
+
+  it('trips the eastmoney circuit breaker after 3 consecutive failures', async () => {
+    const dir = await tempDir()
+    mockedList.mockResolvedValue([
+      stock('600001', '甲公司', 'main', '20100101'),
+      stock('600002', '乙公司', 'main', '20100101'),
+      stock('600003', '丙公司', 'main', '20100101'),
+      stock('600004', '丁公司', 'main', '20100101'),
+      stock('600005', '戊公司', 'main', '20100101'),
+    ])
+    mockedBars.mockRejectedValue(new Error('socket reset'))
+    mockedTencent.mockResolvedValue(fixtureBars())
+
+    const result = await runScreen(noTokenHost, config(dir), registry(), {
+      strategyId: 'low_flat_limit_up',
+      signal: new AbortController().signal,
+    })
+    expect(result.scanned).toBe(5)
+    // Stocks 1-3 try eastmoney then tencent; the breaker skips eastmoney after that.
+    expect(mockedBars).toHaveBeenCalledTimes(3)
+    expect(mockedTencent).toHaveBeenCalledTimes(5)
+    expect(result.notes.some((note) => note.includes('tencent for 5'))).toBe(true)
+  })
+
+  it('throws with both causes when every kline source fails', async () => {
+    const dir = await tempDir()
+    mockedList.mockResolvedValue([stock('600001', '好公司', 'main', '20100101')])
+    mockedBars.mockRejectedValue(new Error('east down'))
+    mockedTencent.mockRejectedValue(new Error('tencent down'))
+    await expect(
+      runScreen(noTokenHost, config(dir), registry(), {
+        strategyId: 'low_flat_limit_up',
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow(/all kline sources failed .*east down \| tencent: tencent down/)
+  })
+
   it('throws loud guidance for explicit tushare without a token', async () => {
     const dir = await tempDir()
     await expect(

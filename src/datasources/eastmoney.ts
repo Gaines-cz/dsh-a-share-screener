@@ -11,8 +11,41 @@
 import { fetchJson, RateLimiter } from '../http.js'
 import { boardFromCode, exchangeSuffix, type Bar, type StockMeta } from '../types.js'
 
-const LIST_URL = 'https://push2.eastmoney.com/api/qt/clist/get'
 const KLINE_URL = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
+
+/**
+ * Realtime quote hosts occasionally reject datacenter/local-network clients at
+ * the TLS layer while the delayed-quote host keeps serving the same clist API
+ * (delayed snapshots are irrelevant for listing metadata), so list requests
+ * fail over between hosts. The first working host is remembered for the
+ * process lifetime.
+ */
+const LIST_HOSTS = ['push2.eastmoney.com', 'push2delay.eastmoney.com'] as const
+let workingListHost: string | undefined
+
+async function fetchListPage(
+  page: number,
+  pageSize: number,
+  limiter: RateLimiter,
+  signal: AbortSignal,
+): Promise<ListResponse> {
+  const hosts = workingListHost ? [workingListHost, ...LIST_HOSTS.filter((h) => h !== workingListHost)] : [...LIST_HOSTS]
+  let lastError: unknown
+  for (const host of hosts) {
+    try {
+      const url =
+        `https://${host}/api/qt/clist/get?pn=${page}&pz=${pageSize}&po=1&np=1&fltt=2&invt=2&fid=f12` +
+        `&fs=${encodeURIComponent(FS_ALL)}&fields=f12,f13,f14,f26`
+      const json = (await fetchJson({ url, limiter, signal, retries: 1 })) as ListResponse
+      workingListHost = host
+      return json
+    } catch (err) {
+      if (signal.aborted) throw err
+      lastError = err
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
+}
 
 /** All A-share boards (BSE included; universe filtering happens later). */
 const FS_ALL = 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048'
@@ -42,10 +75,7 @@ export async function eastmoneyListStocks(
   let page = 1
   for (;;) {
     if (signal.aborted) throw new Error('aborted')
-    const url =
-      `${LIST_URL}?pn=${page}&pz=${pageSize}&po=1&np=1&fltt=2&invt=2&fid=f12` +
-      `&fs=${encodeURIComponent(FS_ALL)}&fields=f12,f13,f14,f26`
-    const json = (await fetchJson({ url, limiter, signal })) as ListResponse
+    const json = await fetchListPage(page, pageSize, limiter, signal)
     const diff = json.data?.diff
     const entries = Array.isArray(diff) ? diff : Object.values(diff ?? {})
     if (entries.length === 0) break

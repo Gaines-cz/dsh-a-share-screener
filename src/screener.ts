@@ -7,6 +7,7 @@
 import { join } from 'node:path'
 import { defaultCacheDir, readJson, writeJson } from './cache.js'
 import { eastmoneyDailyBars, eastmoneyListStocks } from './datasources/eastmoney.js'
+import { tencentDailyBars } from './datasources/tencent.js'
 import { RateLimiter, abortError } from './http.js'
 import {
   tushareDailyForDate,
@@ -219,42 +220,87 @@ export async function runScreen(
   // ---- Incremental maintenance + per-stock scan ----
   const startDate = historyStartDate(config.historyBars)
   const tushareDeps: TushareDeps | undefined = source === 'tushare' && token ? { token, limiter } : undefined
-  const barsDir = join(cacheDir, source, 'bars')
-  const barsFileFor = (fullCode: string): string => join(barsDir, `${fullCode}.json`)
   const fetchedThisRun = new Set<string>()
 
   if (tushareDeps) {
     await refreshTushareByDates(cacheDir, startDate, today, tushareDeps, signal, host, fetchedThisRun)
   }
 
+  /**
+   * Free-path kline acquisition with ordered source fallback: eastmoney
+   * (internal host failover, incremental append) then tencent (full-window
+   * refetch). Each source keeps its own cache directory because back-adjusted
+   * price anchors differ between vendors and must never mix in one series.
+   */
+  const klineSourceCounts: Record<string, number> = {}
+  // Circuit breaker: when eastmoney kline fetches fail consecutively at the
+  // start (e.g. a network blocks the host), skip eastmoney for the rest of the
+  // run instead of burning retries on every stock. Any success resets it.
+  let eastmoneyConsecutiveFailures = 0
+  let eastmoneyKlineDead = false
+  const acquireFreeBars = async (stock: StockMeta): Promise<BarsFile> => {
+    const errors: string[] = []
+    const sources: readonly ('eastmoney' | 'tencent')[] = eastmoneyKlineDead ? ['tencent'] : ['eastmoney', 'tencent']
+    for (const src of sources) {
+      const file = join(cacheDir, src, 'bars', `${stock.fullCode}.json`)
+      try {
+        let fileData = await readJson<BarsFile>(file)
+        if (!fileData || fileData.bars.length === 0) {
+          const bars =
+            src === 'eastmoney'
+              ? await eastmoneyDailyBars(stock.fullCode, startDate, limiter, signal)
+              : await tencentDailyBars(stock.fullCode, startDate, limiter, signal)
+          fileData = { code: stock.fullCode, bars: bars.map(toBarTuple) }
+          await writeJson(file, fileData)
+          fetchedThisRun.add(stock.fullCode)
+        } else if (src === 'eastmoney') {
+          const refreshed = await refreshEastmoneyStock(stock.fullCode, fileData, startDate, limiter, signal)
+          if (refreshed !== null) {
+            fileData = refreshed
+            await writeJson(file, fileData)
+            fetchedThisRun.add(stock.fullCode)
+          }
+        } else {
+          const lastDate = fileData.bars[fileData.bars.length - 1]?.[0] ?? ''
+          if (lastDate !== '' && lastDate < dateMinusDays(todayYmd(), 2)) {
+            const bars = await tencentDailyBars(stock.fullCode, startDate, limiter, signal)
+            fileData = { code: stock.fullCode, bars: bars.map(toBarTuple) }
+            await writeJson(file, fileData)
+            fetchedThisRun.add(stock.fullCode)
+          }
+        }
+        klineSourceCounts[src] = (klineSourceCounts[src] ?? 0) + 1
+        if (src === 'eastmoney') eastmoneyConsecutiveFailures = 0
+        return fileData
+      } catch (err) {
+        if (signal.aborted) throw abortError()
+        errors.push(`${src}: ${err instanceof Error ? err.message : String(err)}`)
+        if (src === 'eastmoney' && ++eastmoneyConsecutiveFailures >= 3) {
+          eastmoneyKlineDead = true
+          host.log('warn', 'eastmoney klines failing repeatedly; using tencent for the rest of this scan')
+        }
+      }
+    }
+    throw new Error(`all kline sources failed for ${stock.fullCode} — ${errors.join(' | ')}`)
+  }
+
   const candidates: StrategyHit[] = []
   let scanned = 0
   for (const stock of universe) {
     if (signal.aborted) throw abortError()
-    const file = barsFileFor(stock.fullCode)
-    let fileData = await readJson<BarsFile>(file)
-    if (!fileData || fileData.bars.length === 0) {
-      const bars =
-        tushareDeps !== undefined
-          ? await tushareDailyForStock(stock.fullCode, startDate, tushareDeps, signal)
-          : await eastmoneyDailyBars(stock.fullCode, startDate, limiter, signal)
-      fileData = { code: stock.fullCode, bars: bars.map(toBarTuple) }
-      await writeJson(file, fileData)
-      fetchedThisRun.add(stock.fullCode)
-    } else if (tushareDeps === undefined) {
-      // Eastmoney: refresh stale files with an overlap-checked append.
-      const refreshed = await refreshEastmoneyStock(
-        stock.fullCode,
-        fileData,
-        startDate,
-        limiter,
-        signal,
-      )
-      if (refreshed !== null) {
-        fileData = refreshed
-        await writeJson(file, fileData)
+    let fileData: BarsFile
+    if (tushareDeps !== undefined) {
+      const file = join(cacheDir, 'tushare', 'bars', `${stock.fullCode}.json`)
+      let data = await readJson<BarsFile>(file)
+      if (!data || data.bars.length === 0) {
+        const bars = await tushareDailyForStock(stock.fullCode, startDate, tushareDeps, signal)
+        data = { code: stock.fullCode, bars: bars.map(toBarTuple) }
+        await writeJson(file, data)
         fetchedThisRun.add(stock.fullCode)
       }
+      fileData = data
+    } else {
+      fileData = await acquireFreeBars(stock)
     }
     scanned++
     if (scanned % 200 === 0) {
@@ -263,6 +309,9 @@ export async function runScreen(
     const series = barsToSeries(fileData.bars.map(fromBarTuple))
     const hit = strategy.screen({ stock, bars: series }, params)
     if (hit) candidates.push(hit)
+  }
+  if (klineSourceCounts.tencent !== undefined) {
+    notes.push(`klines served by tencent for ${klineSourceCounts.tencent} stock(s) (eastmoney unavailable)`)
   }
 
   candidates.sort((a, b) => a.code.localeCompare(b.code))

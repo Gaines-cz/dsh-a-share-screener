@@ -64,9 +64,12 @@ All thresholds are per-call parameters with defaults (see `a_share_list_strategi
 | Source | Token | Cold scan | Incremental |
 |---|---|---|---|
 | [Tushare Pro](https://tushare.pro/) (primary) | your own | per-stock `daily`, rate-limited (default 200 req/min) | one `daily` call per new trade date, merged into per-stock cache files |
-| Eastmoney public endpoints (fallback) | none | per-stock back-adjusted klines | per-stock append with overlap-consistency check |
+| Eastmoney public endpoints (fallback) | none | per-stock back-adjusted klines; clist host fails over realtime → delayed | per-stock append with overlap-consistency check |
+| Tencent quote center (last resort) | none | back-adjusted klines, paged at 640 rows/request | full-window refetch when stale |
 
-Choose with the plugin config `dataSource: auto | tushare | eastmoney` (`auto` = tushare when a token resolves, else eastmoney). Cache lives under `$DSH_HOME/a-share-screener/` (override with `cacheDir`).
+Free-path behavior: each stock tries eastmoney first, then tencent. A circuit breaker skips eastmoney for the rest of the scan after 3 consecutive failures. Back-adjustment anchors differ between vendors, so each source keeps its own cache directory — series never mix sources.
+
+Choose with the plugin config `dataSource: auto | tushare | eastmoney` (`auto` = tushare when a token resolves, else the free path). Cache lives under `$DSH_HOME/a-share-screener/` (override with `cacheDir`).
 
 ## Plugin configuration
 
@@ -109,7 +112,7 @@ Register it in `src/index.ts` next to the built-in one — no other changes. The
 ## Limitations
 
 - Tushare free tier covers `daily`/`stock_basic`/`trade_cal` at ~200–500 calls/min; the rate limiter defaults to 200 (configurable) and retries rate-limit rejections.
-- Eastmoney endpoints are public but undocumented; field drift fails loudly rather than silently.
+- Eastmoney/Tencent endpoints are public but undocumented; field drift fails loudly rather than silently, and per-stock source fallback keeps one blocked host from killing a scan.
 - ST filtering uses the current stock name (no historical name-change tracking).
 - Everything runs in the local process; no data leaves your machine except API calls to the chosen source.
 
