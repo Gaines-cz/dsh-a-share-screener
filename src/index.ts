@@ -13,7 +13,7 @@ import { RateLimiter } from './http.js'
 import type { ScreenerConfig, ScreenerHost } from './screener.js'
 import { lowFlatLimitUpStrategy } from './strategies/low-flat-limitup.js'
 import { StrategyRegistry } from './strategies/registry.js'
-import { createListStrategiesTool, createScreenTool } from './tool.js'
+import { createListIndustriesTool, createListStrategiesTool, createScreenTool } from './tool.js'
 
 export const name = 'a-share-screener'
 
@@ -96,5 +96,6 @@ export function apply(ctx: Context, config: Config): void {
     limiter,
   }
   ctx.tools.register(createListStrategiesTool(deps))
+  ctx.tools.register(createListIndustriesTool(deps))
   ctx.tools.register(createScreenTool(deps))
 }

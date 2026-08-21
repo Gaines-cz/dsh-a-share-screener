@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { runScreen, type ScreenerConfig, type ScreenerHost } from './screener.js'
+import { normalizeIndustries, runScreen, type ScreenerConfig, type ScreenerHost } from './screener.js'
 import { eastmoneyDailyBars, eastmoneyListStocks } from './datasources/eastmoney.js'
 import { tencentDailyBars } from './datasources/tencent.js'
 import { RateLimiter } from './http.js'
@@ -97,7 +97,7 @@ const fastLimiter = (): RateLimiter => new RateLimiter(600_000)
 async function scan(
   cacheDir: string,
   cfg: ScreenerConfig,
-  args: { strategyId: string; params?: unknown; refresh?: boolean; signal: AbortSignal },
+  args: { strategyId: string; params?: unknown; refresh?: boolean; industries?: string[]; signal: AbortSignal },
 ): Promise<ReturnType<typeof runScreen>> {
   return runScreen(noTokenHost, cfg, registry(), fastLimiter(), args)
 }
@@ -275,6 +275,18 @@ describe('runScreen failure modes', () => {
     ).rejects.toThrow(/TUSHARE_TOKEN/)
   })
 
+  it('rejects industry filtering on the free eastmoney path', async () => {
+    const dir = await tempDir()
+    mockedList.mockResolvedValue([stock('600001', '好公司', 'main', '20100101')])
+    await expect(
+      scan(dir, config(dir), {
+        strategyId: 'low_flat_limit_up',
+        industries: ['银行'],
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow(/industry filtering requires the tushare source/)
+  })
+
   it('throws with the available strategies for an unknown id', async () => {
     const dir = await tempDir()
     await expect(
@@ -302,5 +314,13 @@ describe('runScreen failure modes', () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toThrow(/must be an integer/)
+  })
+})
+
+describe('normalizeIndustries', () => {
+  it('trims, dedupes, and drops non-strings and empties', () => {
+    expect(normalizeIndustries([' 农林牧渔 ', '银行', '农林牧渔', '', ' ', 42, null])).toEqual(['农林牧渔', '银行'])
+    expect(normalizeIndustries(undefined)).toEqual([])
+    expect(normalizeIndustries('农林牧渔')).toEqual([])
   })
 })

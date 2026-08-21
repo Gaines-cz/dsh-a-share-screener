@@ -8,7 +8,7 @@
  * bottom. Each condition's threshold is a validated, overridable parameter.
  * @module a-share-screener/strategies/low-flat-limitup
  */
-import { LIMIT_UP_THRESHOLD, type SeriesBar } from '../types.js'
+import { limitUpThreshold, type SeriesBar } from '../types.js'
 import type { Strategy, StrategyHit, StrategyParams, StrategyScreenInput } from './registry.js'
 
 function round(value: number, digits: number): number {
@@ -175,7 +175,7 @@ export const lowFlatLimitUpStrategy: Strategy = {
     if (maSpread > (params.maxFlatMaSpread as number)) return null
 
     // D. Volume-heavy limit-up within the window, followed by pullback + cooldown.
-    const threshold = LIMIT_UP_THRESHOLD[input.stock.board]
+    const threshold = limitUpThreshold(input.stock.board, input.stock.name)
     const cooldownBars = params.cooldownBars as number
     const minGap = cooldownBars + 1
     const firstCandidate = Math.max(5, last - (params.limitUpWindowBars as number))

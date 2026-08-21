@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { barsToSeries, boardFromCode, exchangeSuffix, toFullCode, type Bar } from './types.js'
+import { barsToSeries, boardFromCode, exchangeSuffix, limitUpThreshold, toFullCode, type Bar } from './types.js'
 
 function bar(date: string, close: number, preClose: number | null = null, volume = 100): Bar {
   return { date, open: close, high: close, low: close, close, volume, preClose }
@@ -42,5 +42,18 @@ describe('barsToSeries', () => {
     // Day before split: close 100. Split day: preClose 50, close 50.5 → +1%, not -49.5%.
     const series = barsToSeries([bar('20250101', 100, 99), bar('20250102', 50.5, 50)])
     expect(series[1]!.ret).toBeCloseTo(0.01, 10)
+  })
+})
+
+describe('limitUpThreshold', () => {
+  it('uses the ±5% band only for main-board ST names', () => {
+    expect(limitUpThreshold('main', '民生银行')).toBe(0.098)
+    expect(limitUpThreshold('main', 'ST恒久')).toBe(0.048)
+    expect(limitUpThreshold('main', '*ST宁科')).toBe(0.048)
+    expect(limitUpThreshold('chinext', 'ST华英')).toBe(0.198)
+    expect(limitUpThreshold('star', '中芯国际')).toBe(0.198)
+    expect(limitUpThreshold('bse', '北交所股')).toBe(0.298)
+    // Delisting names trade on the 10% main-board band, not the ST band.
+    expect(limitUpThreshold('main', '退市未来')).toBe(0.098)
   })
 })

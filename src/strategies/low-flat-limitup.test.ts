@@ -133,6 +133,35 @@ describe('low_flat_limit_up negative cases', () => {
   })
 })
 
+describe('low_flat_limit_up ST limit-up threshold', () => {
+  it('matches a main-board ST name at a +5% limit-up', () => {
+    const { closes, vols } = positiveFixture()
+    closes[740] = closes[739]! * 1.05
+    const stock = { ...META, name: 'ST恒久' } as StockMeta
+    const hit = lowFlatLimitUpStrategy.screen(
+      { stock, bars: seriesFrom(closes, vols) },
+      DEFAULTS,
+    )
+    expect(hit).not.toBeNull()
+  })
+
+  it('rejects the same +5% day on a non-ST main-board name', () => {
+    const { closes, vols } = positiveFixture()
+    closes[740] = closes[739]! * 1.05
+    expect(screen(closes, vols)).toBeNull()
+  })
+
+  it('does not apply the main-board ±5% band to a ChiNext ST name', () => {
+    // +5% is a valid limit-up for a main-board ST, but not for ChiNext (20% band).
+    const { closes, vols } = positiveFixture()
+    closes[740] = closes[739]! * 1.05
+    const stock = { ...META, name: 'ST华英', board: 'chinext' } as StockMeta
+    const params = { ...DEFAULTS } as StrategyParams
+    const hit = lowFlatLimitUpStrategy.screen({ stock, bars: seriesFrom(closes, vols) }, params)
+    expect(hit).toBeNull()
+  })
+})
+
 describe('StrategyRegistry params', () => {
   const registry = new StrategyRegistry()
   registry.register(lowFlatLimitUpStrategy)

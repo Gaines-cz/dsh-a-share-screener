@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createListStrategiesTool, createScreenTool } from './tool.js'
+import { createListIndustriesTool, createListStrategiesTool, createScreenTool } from './tool.js'
 import { RateLimiter } from './http.js'
 import type { ScreenerConfig, ScreenerHost } from './screener.js'
 import { StrategyRegistry } from './strategies/registry.js'
@@ -34,6 +34,14 @@ describe('tool construction', () => {
   it('exposes the registered strategy ids as the parameter enum', () => {
     const screen = createScreenTool(deps)
     expect(JSON.stringify(screen)).toContain('low_flat_limit_up')
+  })
+
+  it('builds the industry discovery tool and screen industries parameter', () => {
+    const industries = createListIndustriesTool(deps)
+    expect(industries.name).toBe('a_share_list_industries')
+    const screen = createScreenTool(deps)
+    expect(JSON.stringify(screen)).toContain('industries')
+    expect(JSON.stringify(screen)).toContain('a_share_list_industries')
   })
 })
 

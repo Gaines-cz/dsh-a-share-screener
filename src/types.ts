@@ -19,6 +19,16 @@ export const LIMIT_UP_THRESHOLD: Readonly<Record<Board, number>> = {
   bse: 0.298,
 }
 
+/**
+ * Landing threshold for a close-at-limit-up day. Main-board risk-warning names
+ * trade under the ±5% band (limit-up ≈ +5%, ~+4.8% after exchange rounding), so
+ * they get their own threshold; every other board/name uses {@link LIMIT_UP_THRESHOLD}.
+ */
+export function limitUpThreshold(board: Board, name: string): number {
+  if (board === 'main' && name.includes('ST')) return 0.048
+  return LIMIT_UP_THRESHOLD[board]
+}
+
 /** One listed stock. `code` is the 6-digit symbol, `fullCode` the exchange-suffixed form data APIs use. */
 export interface StockMeta {
   code: string
@@ -27,6 +37,8 @@ export interface StockMeta {
   board: Board
   /** Listing date, YYYYMMDD. */
   listDate: string
+  /** Shenwan level-1 industry (e.g. 农林牧渔). Present only on the tushare source. */
+  industry?: string
 }
 
 /**
