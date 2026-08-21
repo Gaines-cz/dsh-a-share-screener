@@ -1,6 +1,6 @@
 # dsh-a-share-screener
 
-面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）的 A 股选股插件：可扩展的选股策略注册表，tushare 主数据源（用户自己的 token）+ 东方财富免费回退（无需 token）。
+面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）的 A 股选股插件：可扩展的选股策略注册表，基于单一免费、无需 token 的东方财富数据源，并抽象出可扩展的数据源接入层。
 
 **这是对历史量价形态的技术筛选工具，不构成任何投资建议。**
 
@@ -27,16 +27,6 @@ allowBuilds:
 dsh --profile myprofile
 ```
 
-## tushare token（可选，推荐）
-
-插件配置只携带**环境变量名**（默认 `TUSHARE_TOKEN`），绝不携带机密本身。把你的 [tushare pro](https://tushare.pro/) token 放在任一处：
-
-- 启动 dsh 的目录下 `.env` 文件：`TUSHARE_TOKEN=xxxxxxxx`
-- shell 环境：`export TUSHARE_TOKEN=xxxxxxxx`
-- dsh 的凭据托管存储（由 credentials 分层解析）
-
-token 在每次扫描时解析，轮换无需重启。没有 token 时插件自动使用免费的东方财富源；强制 `dataSource: 'tushare'` 则必须有 token。
-
 ## 使用
 
 用自然语言对 agent 说：
@@ -61,15 +51,30 @@ token 在每次扫描时解析，轮换无需重启。没有 token 时插件自�
 
 ## 数据源
 
+插件内置唯一一个免费、无需 token 的数据源：[东方财富](https://www.eastmoney.com/) 公开接口。
+
 | 数据源 | token | 冷启动 | 增量 |
 |---|---|---|---|
-| [tushare pro](https://tushare.pro/)（主源） | 用户自备 | 按股拉 `daily`，限速（默认 200 次/分钟） | 每个新交易日一次 `daily` 调用，合并进每股缓存文件 |
-| 东方财富公开接口（回退） | 无 | 按股拉后复权K线；列表域名实时→延迟自动故障转移 | 按股追加 + 重叠一致性校验 |
-| 腾讯行情中心（兜底） | 无 | 后复权K线，按 640 根/次分页 | 过期时整窗重拉 |
+| 东方财富（内置） | 无 | 按股拉后复权K线；列表域名实时→延迟自动故障转移 | 按股追加 + 重叠一致性校验 |
 
-免费路径行为：每股先试东财、再试腾讯；东财连续失败 3 次后熔断，本次扫描余下直接走腾讯。各家后复权基准不同，因此每个数据源使用独立缓存目录——序列绝不混源。
+每个适配器都位于 `DataSource` 接口之后（`src/datasources/types.ts`）；screener、工具、插件入口只依赖该接口，绝不 import 具体厂商。缓存在 `$DSH_HOME/a-share-screener/<source-id>/`（可用 `cacheDir` 覆盖）。
 
-插件配置 `dataSource: auto | tushare | eastmoney` 选择（`auto` = 有 token 用 tushare，否则走免费路径）。缓存在 `$DSH_HOME/a-share-screener/`（可用 `cacheDir` 覆盖）。
+### 新增数据源
+
+后续接入其他厂商时，实现 `DataSource` 并在 `src/datasources/index.ts` 注册即可：
+
+```ts
+// src/datasources/my-vendor.ts
+import type { DataSource } from './types.js'
+
+export function createMyVendorDataSource(limiter: RateLimiter): DataSource {
+  async function listStocks(signal: AbortSignal) { /* → StockMeta[] */ }
+  async function dailyBars(fullCode: string, startDate: string, signal: AbortSignal) { /* → Bar[] */ }
+  return { id: 'my-vendor', capabilities: { industry: false }, listStocks, dailyBars }
+}
+```
+
+把 `myvendor: createMyVendorDataSource` 加进 `FACTORIES`。若厂商能提供板块分类，则设 `capabilities.industry: true`（并填充 `StockMeta.industry`）。
 
 ## 插件配置
 
@@ -79,8 +84,7 @@ token 在每次扫描时解析，轮换无需重启。没有 token 时插件自�
 - replace:
     - id: a-share-screener
       config:
-        tokenEnv: TUSHARE_TOKEN
-        dataSource: auto
+        # cacheDir: /path/to/cache   # 可选，默认 $DSH_HOME/a-share-screener
         requestsPerMinute: 200
         historyBars: 800
         scanTimeoutMs: 1800000
@@ -112,10 +116,10 @@ export const myStrategy: Strategy = {
 
 ## 已知限制
 
-- tushare 免费档可用 `daily`/`stock_basic`/`trade_cal`，约 200–500 次/分钟；限速器默认 200（可配置），对限频拒绝自动退避重试。
-- 东方财富/腾讯接口公开但非官方文档化；字段漂移会响亮失败而非静默出错，逐股源级回退保证单一域名被封不会中断扫描。
+- 东方财富接口公开但非官方文档化；字段漂移会响亮失败而非静默出错，列表域名实时→延迟自动故障转移，单一域名被封不会中断扫描。
+- 东方财富源目前不提供行业分类（`capabilities.industry` 为 false）；板块选股需要能提供该能力的厂商。
 - ST 过滤基于当前股票名称（不追踪历史更名）。
-- 全部计算在本地进程内完成；除所选数据源的 API 调用外不外发任何数据。
+- 全部计算在本地进程内完成；除数据源的 API 调用外不外发任何数据。
 
 ## 许可
 

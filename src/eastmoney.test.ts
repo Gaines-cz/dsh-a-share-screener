@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { eastmoneyListStocks } from './datasources/eastmoney.js'
+import { createEastmoneyDataSource } from './datasources/eastmoney.js'
 import { RateLimiter } from './http.js'
 
 afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-const limiter = new RateLimiter(600_000)
+const dataSource = createEastmoneyDataSource(new RateLimiter(600_000))
 
 interface PageOpts {
   count: number
@@ -24,7 +24,7 @@ function pageResponse({ count, total, page = 1 }: PageOpts & { page?: number }):
   return { data: { total, diff } }
 }
 
-describe('eastmoneyListStocks pagination', () => {
+describe('eastmoney listStocks pagination', () => {
   it('keeps paging when total is missing, stopping only on a short page (regression: old code truncated to page 1)', async () => {
     const fetchMock = vi
       .fn()
@@ -33,7 +33,7 @@ describe('eastmoneyListStocks pagination', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify(pageResponse({ count: 37, page: 3 })), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const stocks = await eastmoneyListStocks(limiter, new AbortController().signal)
+    const stocks = await dataSource.listStocks(new AbortController().signal)
     expect(stocks.length).toBe(237) // 100 + 100 + 37, not just the first 100
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
@@ -45,7 +45,7 @@ describe('eastmoneyListStocks pagination', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify(pageResponse({ count: 50, total: 150, page: 2 })), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const stocks = await eastmoneyListStocks(limiter, new AbortController().signal)
+    const stocks = await dataSource.listStocks(new AbortController().signal)
     expect(stocks.length).toBe(150)
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
@@ -61,7 +61,7 @@ describe('eastmoneyListStocks pagination', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { total: 1, diff } }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const stocks = await eastmoneyListStocks(limiter, new AbortController().signal)
+    const stocks = await dataSource.listStocks(new AbortController().signal)
     expect(stocks).toHaveLength(1)
     expect(stocks[0]!.fullCode).toBe('600519.SH')
   })

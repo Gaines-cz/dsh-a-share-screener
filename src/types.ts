@@ -37,15 +37,18 @@ export interface StockMeta {
   board: Board
   /** Listing date, YYYYMMDD. */
   listDate: string
-  /** Shenwan level-1 industry (e.g. 农林牧渔). Present only on the tushare source. */
+  /**
+   * Industry/sector classification. Only populated by sources whose
+   * `capabilities.industry` is true (extension point for future vendors).
+   */
   industry?: string
 }
 
 /**
- * One daily bar. Prices are in the source's native units (tushare: raw CNY;
- * eastmoney: adjusted CNY) — never mix bars from different sources in one
- * series. Volume is in lots (手). Price-level conditions must use the chained
- * return index, not raw closes, so ex-rights events stay correct.
+ * One daily bar. Prices are in the source's native units (raw or
+ * back-adjusted CNY, depending on the vendor) — never mix bars from different
+ * sources in one series. Volume is in lots (手). Price-level conditions must
+ * use the chained return index, not raw closes, so ex-rights events stay correct.
  */
 export interface Bar {
   /** Trade date, YYYYMMDD. */
@@ -56,10 +59,10 @@ export interface Bar {
   close: number
   volume: number
   /**
-   * Previous close as published by the source. Tushare publishes the
-   * ex-rights-adjusted previous close, so `close / preClose - 1` is the true
-   * daily return even across corporate actions. Null when the source does not
-   * publish one (eastmoney klines).
+   * Previous close as published by the source. When present and positive it is
+   * the ex-rights-adjusted previous close, so `close / preClose - 1` is the
+   * true daily return even across corporate actions. Null when the source does
+   * not publish one (e.g. Eastmoney klines).
    */
   preClose: number | null
 }
@@ -130,4 +133,22 @@ export function exchangeSuffix(code: string): 'SH' | 'SZ' | 'BJ' {
 /** Build the exchange-suffixed full code from a 6-digit symbol. */
 export function toFullCode(code: string): string {
   return `${code}.${exchangeSuffix(code)}`
+}
+
+/** Local YYYYMMDD of a Date. */
+export function ymd(date: Date): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}${m}${d}`
+}
+
+/** YYYYMMDD minus `days` calendar days. */
+export function dateMinusDays(ymdStr: string, days: number): string {
+  const year = Number(ymdStr.slice(0, 4))
+  const month = Number(ymdStr.slice(4, 6))
+  const day = Number(ymdStr.slice(6, 8))
+  const date = new Date(Date.UTC(year, month - 1, day))
+  date.setUTCDate(date.getUTCDate() - days)
+  return ymd(date)
 }

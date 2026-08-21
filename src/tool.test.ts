@@ -1,15 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { createListIndustriesTool, createListStrategiesTool, createScreenTool } from './tool.js'
-import { RateLimiter } from './http.js'
+import { createListStrategiesTool, createScreenTool } from './tool.js'
+import type { DataSource } from './datasources/index.js'
 import type { ScreenerConfig, ScreenerHost } from './screener.js'
 import { StrategyRegistry } from './strategies/registry.js'
 import { lowFlatLimitUpStrategy } from './strategies/low-flat-limitup.js'
 import { Config } from './index.js'
 
-const host: ScreenerHost = { resolveToken: async () => undefined, log: () => {} }
+const host: ScreenerHost = { log: () => {} }
 const config: ScreenerConfig = {
-  tokenEnv: 'TUSHARE_TOKEN',
-  dataSource: 'auto',
   cacheDir: null,
   requestsPerMinute: 200,
   historyBars: 800,
@@ -18,12 +16,18 @@ const config: ScreenerConfig = {
   minListDays: 365,
   scanTimeoutMs: 1_800_000,
 }
+const dataSource: DataSource = {
+  id: 'eastmoney',
+  capabilities: { industry: false },
+  listStocks: async () => [],
+  dailyBars: async () => [],
+}
 const registry = new StrategyRegistry()
 registry.register(lowFlatLimitUpStrategy)
-const deps = { host, config, registry, limiter: new RateLimiter(600_000) }
+const deps = { host, config, dataSource, registry }
 
 describe('tool construction', () => {
-  it('builds both tools with valid DSL schemas (defineTool compiles them)', () => {
+  it('builds the tools with valid DSL schemas (defineTool compiles them)', () => {
     const list = createListStrategiesTool(deps)
     expect(list.name).toBe('a_share_list_strategies')
     const screen = createScreenTool(deps)
@@ -35,21 +39,11 @@ describe('tool construction', () => {
     const screen = createScreenTool(deps)
     expect(JSON.stringify(screen)).toContain('low_flat_limit_up')
   })
-
-  it('builds the industry discovery tool and screen industries parameter', () => {
-    const industries = createListIndustriesTool(deps)
-    expect(industries.name).toBe('a_share_list_industries')
-    const screen = createScreenTool(deps)
-    expect(JSON.stringify(screen)).toContain('industries')
-    expect(JSON.stringify(screen)).toContain('a_share_list_industries')
-  })
 })
 
 describe('plugin Config schema', () => {
   it('fills defaults for absent fields', () => {
     const resolved = Config({} as unknown as Config) as unknown as Record<string, unknown>
-    expect(resolved.tokenEnv).toBe('TUSHARE_TOKEN')
-    expect(resolved.dataSource).toBe('auto')
     expect(resolved.requestsPerMinute).toBe(200)
     expect(resolved.historyBars).toBe(800)
     expect(resolved.excludeST).toBe(true)

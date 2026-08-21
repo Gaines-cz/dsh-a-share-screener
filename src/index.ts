@@ -1,32 +1,28 @@
 /**
  * Plugin entry: registers the screening tools with the harness tool registry.
  *
- * Configuration carries only a reference to the tushare token (an env-var
- * name), never the secret itself; the value resolves per scan through the dsh
- * credentials service (process env → managed credentials → .env layers) with a
- * plain process-env fallback, so rotating the token needs no restart.
+ * The screener is data-source agnostic; it talks to a single free Eastmoney
+ * source built via {@link createDataSource}. Adding another vendor means
+ * implementing {@link DataSource} and registering it there — no changes here.
  * @module a-share-screener
  */
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
+import { createDataSource } from './datasources/index.js'
 import { RateLimiter } from './http.js'
 import type { ScreenerConfig, ScreenerHost } from './screener.js'
 import { lowFlatLimitUpStrategy } from './strategies/low-flat-limitup.js'
 import { StrategyRegistry } from './strategies/registry.js'
-import { createListIndustriesTool, createListStrategiesTool, createScreenTool } from './tool.js'
+import { createListStrategiesTool, createScreenTool } from './tool.js'
 
 export const name = 'a-share-screener'
 
 export const inject = ['tools']
 
 export interface Config {
-  /** Env-var name whose value holds the Tushare Pro token. */
-  tokenEnv: string
-  /** Data source selection; 'auto' prefers tushare when a token resolves. */
-  dataSource: 'auto' | 'tushare' | 'eastmoney'
   /** Cache directory; defaults to $DSH_HOME/a-share-screener (~/.dsh fallback). */
   cacheDir?: string | null
-  /** Outbound request budget shared by all data-source calls. */
+  /** Outbound request budget shared by every data-source call. */
   requestsPerMinute: number
   /** Trading-day bars kept per stock (window for high/percentile lookback). */
   historyBars: number
@@ -41,8 +37,6 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  tokenEnv: Schema.string().default('TUSHARE_TOKEN'),
-  dataSource: Schema.union(['auto', 'tushare', 'eastmoney']).default('auto'),
   cacheDir: Schema.string(),
   requestsPerMinute: Schema.number().min(30).max(1000).default(200),
   historyBars: Schema.number().min(250).max(3000).default(800),
@@ -52,34 +46,14 @@ export const Config: Schema<Config> = Schema.object({
   scanTimeoutMs: Schema.number().min(60_000).max(7_200_000).default(1_800_000),
 })
 
-interface CredentialsLike {
-  resolve(ref: unknown): Promise<{ value?: string } | undefined>
-}
-
-/** Build the host adapter: token resolution + logging through the harness. */
-function createHost(ctx: Context): ScreenerHost {
-  return {
-    async resolveToken(envName) {
-      const credentials = (ctx as unknown as { credentials?: CredentialsLike }).credentials
-      if (credentials) {
-        try {
-          const hit = await credentials.resolve(envName)
-          if (hit?.value) return hit.value
-        } catch {
-          // Fall through to the plain environment lookup.
-        }
-      }
-      return process.env[envName] || undefined
-    },
-    log(level, message) {
-      const logger = (ctx as unknown as { logger?: (title: string) => { info(m: string): void; warn(m: string): void } })
-        .logger
-      if (typeof logger === 'function') {
-        logger('a-share-screener')[level](message)
-      } else {
-        console[level === 'warn' ? 'warn' : 'log'](`[a-share-screener] ${message}`)
-      }
-    },
+/** Log through the harness logger, falling back to the console. */
+function log(ctx: Context, level: 'info' | 'warn', message: string): void {
+  const logger = (ctx as unknown as { logger?: (title: string) => { info(m: string): void; warn(m: string): void } })
+    .logger
+  if (typeof logger === 'function') {
+    logger('a-share-screener')[level](message)
+  } else {
+    console[level === 'warn' ? 'warn' : 'log'](`[a-share-screener] ${message}`)
   }
 }
 
@@ -88,14 +62,14 @@ export function apply(ctx: Context, config: Config): void {
   registry.register(lowFlatLimitUpStrategy)
   // One rate budget for the whole plugin lifetime: concurrent scans would
   // otherwise multiply outbound requests against the data source.
-  const limiter = new RateLimiter(config.requestsPerMinute)
+  const dataSource = createDataSource('eastmoney', new RateLimiter(config.requestsPerMinute))
+  const host: ScreenerHost = { log: (level, message) => log(ctx, level, message) }
   const deps = {
-    host: createHost(ctx),
+    host,
     config: config as ScreenerConfig,
+    dataSource,
     registry,
-    limiter,
   }
   ctx.tools.register(createListStrategiesTool(deps))
-  ctx.tools.register(createListIndustriesTool(deps))
   ctx.tools.register(createScreenTool(deps))
 }

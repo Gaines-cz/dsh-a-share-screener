@@ -6,13 +6,9 @@ import { Context } from "@deepseek-ai/cordis";
 declare const name = "a-share-screener";
 declare const inject: string[];
 interface Config {
-  /** Env-var name whose value holds the Tushare Pro token. */
-  tokenEnv: string;
-  /** Data source selection; 'auto' prefers tushare when a token resolves. */
-  dataSource: 'auto' | 'tushare' | 'eastmoney';
   /** Cache directory; defaults to $DSH_HOME/a-share-screener (~/.dsh fallback). */
   cacheDir?: string | null;
-  /** Outbound request budget shared by all data-source calls. */
+  /** Outbound request budget shared by every data-source call. */
   requestsPerMinute: number;
   /** Trading-day bars kept per stock (window for high/percentile lookback). */
   historyBars: number;
