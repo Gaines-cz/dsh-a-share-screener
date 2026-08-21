@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { tushareDailyForDate } from './datasources/tushare.js'
+import { tushareDailyForDate, tushareListStocks } from './datasources/tushare.js'
 import { RateLimiter } from './http.js'
 
 afterEach(() => {
@@ -67,5 +67,35 @@ describe('tushare callApi error handling', () => {
 
     await expect(tushareDailyForDate('20260101', deps, signal)).rejects.toThrow(/积分不足/)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('tushareListStocks industry mapping', () => {
+  it('maps Shenwan industry and treats null/empty as undefined', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 0,
+          data: {
+            fields: ['ts_code', 'name', 'list_date', 'industry'],
+            items: [
+              ['600001.SH', '浦发银行', '19991110', '银行'],
+              ['300750.SZ', '宁德时代', '20180611', '电力设备'],
+              ['600002.SH', 'ST某某', '19980101', null],
+              ['000001.SZ', '平安银行', '19910403', ''],
+            ],
+          },
+        }),
+        { status: 200 },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const stocks = await tushareListStocks(deps, signal)
+    expect(stocks).toHaveLength(4)
+    expect(stocks[0]!.industry).toBe('银行')
+    expect(stocks[1]!.industry).toBe('电力设备')
+    expect(stocks[2]!.industry).toBeUndefined()
+    expect(stocks[3]!.industry).toBeUndefined()
   })
 })

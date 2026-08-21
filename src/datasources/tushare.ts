@@ -89,7 +89,7 @@ export async function tushareListStocks(deps: TushareDeps, signal: AbortSignal):
   const rows = await callApi(
     'stock_basic',
     { list_status: 'L' },
-    ['ts_code', 'name', 'list_date'],
+    ['ts_code', 'name', 'list_date', 'industry'],
     deps,
     signal,
   )
@@ -100,12 +100,14 @@ export async function tushareListStocks(deps: TushareDeps, signal: AbortSignal):
     const code = fullCode.split('.')[0]!
     const board = boardFromCode(code)
     if (!board) continue
+    const industry = typeof row.industry === 'string' && row.industry.trim() !== '' ? row.industry.trim() : undefined
     out.push({
       code,
       fullCode,
       name: String(row.name ?? ''),
       board,
       listDate: String(row.list_date ?? ''),
+      industry,
     })
   }
   return out

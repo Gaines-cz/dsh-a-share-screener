@@ -44,6 +44,8 @@ export interface ScreenArgs {
   strategyId: string
   params?: unknown
   refresh?: boolean
+  /** Shenwan level-1 industry names to restrict the universe to (tushare source only). */
+  industries?: string[]
   signal: AbortSignal
 }
 
@@ -163,6 +165,19 @@ function isSt(name: string): boolean {
   return name.includes('ST') || name.includes('退')
 }
 
+/** Normalize industry filter input to trimmed, deduped, non-empty names. */
+export function normalizeIndustries(raw: unknown): string[] {
+  const out = new Set<string>()
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (typeof item !== 'string') continue
+      const name = item.trim()
+      if (name !== '') out.add(name)
+    }
+  }
+  return [...out]
+}
+
 function sortTuples(bars: BarTuple[]): BarTuple[] {
   return bars.sort((a, b) => a[0].localeCompare(b[0]))
 }
@@ -212,6 +227,15 @@ export async function runScreen(
     }
   }
 
+  const industries = normalizeIndustries(args.industries)
+  if (industries.length > 0 && source !== 'tushare') {
+    throw new Error(
+      `industry filtering requires the tushare source (the free eastmoney path carries no industry ` +
+        `classification). Set a Tushare token via ${config.tokenEnv} or dataSource: 'tushare', or drop ` +
+        `the industries argument.`,
+    )
+  }
+
   const cacheDir = config.cacheDir ?? defaultCacheDir()
   const signal = args.signal
   const skipped: Record<string, number> = {}
@@ -223,7 +247,11 @@ export async function runScreen(
   const stocksFile = join(cacheDir, 'stocks.json')
   const today = todayYmd()
   let stocksCache = await readJson<StocksCache>(stocksFile)
-  if (args.refresh || !stocksCache || (stocksCache.fetchedAt ?? '') < today) {
+  // A cache written before the industry field existed (or by the free source)
+  // must not serve an industry-filtered scan: re-fetch so `industry` is present.
+  const cacheMissingIndustry =
+    industries.length > 0 && stocksCache !== undefined && !stocksCache.stocks.some((s) => (s.industry ?? '') !== '')
+  if (args.refresh || !stocksCache || (stocksCache.fetchedAt ?? '') < today || cacheMissingIndustry) {
     const stocks =
       source === 'tushare'
         ? await tushareListStocks({ token: token!, limiter }, signal)
@@ -236,7 +264,7 @@ export async function runScreen(
 
   // ---- Universe filters ----
   const minListDate = dateMinusDays(today, config.minListDays)
-  const universe: StockMeta[] = []
+  let universe: StockMeta[] = []
   for (const stock of stocks) {
     if (config.excludeST && isSt(stock.name)) {
       skip('st-or-delisting')
@@ -254,6 +282,29 @@ export async function runScreen(
     }
     universe.push(stock)
   }
+
+  // Industry restriction (tushare only, validated above): keep stocks whose
+  // Shenwan level-1 industry is in the requested set.
+  if (industries.length > 0) {
+    const requested = new Set(industries)
+    const matched = new Set<string>()
+    const before = universe.length
+    universe = universe.filter((stock) => {
+      const industry = (stock.industry ?? '').trim()
+      if (industry !== '' && requested.has(industry)) {
+        matched.add(industry)
+        return true
+      }
+      return false
+    })
+    notes.push(`industry filter [${industries.join(', ')}]: kept ${universe.length}/${before} universe stocks`)
+    for (const name of industries) {
+      if (!matched.has(name)) {
+        notes.push(`industry '${name}' matched 0 stocks; run a_share_list_industries for exact names`)
+      }
+    }
+  }
+
   host.log('info', `universe after filters: ${universe.length} (skipped ${JSON.stringify(skipped)})`)
 
   // ---- Incremental maintenance + per-stock scan ----
@@ -520,6 +571,36 @@ async function refreshEastmoneyStock(
     return { code: fullCode, bars: full.map(toBarTuple) }
   }
   return { code: fullCode, bars: mergeTuples(fileData.bars, fresh.map(toBarTuple)) }
+}
+
+/**
+ * List distinct Shenwan level-1 industries (name → listed-stock count) from a
+ * fresh tushare `stock_basic` call. Used by the a_share_list_industries tool.
+ */
+export async function listIndustries(
+  host: ScreenerHost,
+  config: ScreenerConfig,
+  limiter: RateLimiter,
+  signal: AbortSignal,
+): Promise<{ industries: { name: string; count: number }[] }> {
+  const token = await host.resolveToken(config.tokenEnv)
+  if (token === undefined || token === '') {
+    throw new Error(
+      `industry listing requires a Tushare token. Put it in the env var ${config.tokenEnv} ` +
+        `(e.g. in the .env file of the directory you launch dsh from, or via dsh credentials).`,
+    )
+  }
+  const stocks = await tushareListStocks({ token, limiter }, signal)
+  const counts = new Map<string, number>()
+  for (const stock of stocks) {
+    const industry = (stock.industry ?? '').trim()
+    if (industry === '') continue
+    counts.set(industry, (counts.get(industry) ?? 0) + 1)
+  }
+  const industries = [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+  return { industries }
 }
 
 /** Exported for tests. */
