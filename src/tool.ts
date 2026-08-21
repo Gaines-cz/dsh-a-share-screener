@@ -4,25 +4,22 @@
  * @module a-share-screener/tool
  */
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
-import type { RateLimiter } from './http.js'
+import type { DataSource } from './datasources/index.js'
 import type { ScreenResultView, ScreenerConfig, ScreenerHost } from './screener.js'
-import { listIndustries, runScreen } from './screener.js'
+import { runScreen } from './screener.js'
 import type { StrategyRegistry } from './strategies/registry.js'
 
 interface ToolDeps {
   host: ScreenerHost
   config: ScreenerConfig
+  dataSource: DataSource
   registry: StrategyRegistry
-  /** Process-lifetime limiter shared by every scan (one rate budget per plugin). */
-  limiter: RateLimiter
 }
 
 /** Human/model-readable text report from a canonical scan result. */
 function renderReport(value: ScreenResultView): string {
   const lines: string[] = []
-  lines.push(
-    `A-share screening — strategy ${value.strategy} (${value.dataSource}, token ${value.tokenConfigured ? 'configured' : 'not configured'})`,
-  )
+  lines.push(`A-share screening — strategy ${value.strategy} (${value.dataSource})`)
   lines.push(
     `Scanned ${value.scanned} stocks, matched ${value.matched} in ${(value.durationMs / 1000).toFixed(0)}s ` +
       `(bar files fetched this run: ${value.stocksFetched}).`,
@@ -56,8 +53,7 @@ const outputSchema = {
   additionalProperties: false,
   properties: {
     strategy: { type: 'string', required: true },
-    dataSource: { type: 'string', enum: ['tushare', 'eastmoney'], required: true },
-    tokenConfigured: { type: 'boolean', required: true },
+    dataSource: { type: 'string', required: true },
     generatedAt: { type: 'string', required: true },
     scanned: { type: 'number', required: true },
     matched: { type: 'number', required: true },
@@ -114,14 +110,6 @@ export function createScreenTool(deps: ToolDeps): ToolDefinition {
         type: 'boolean',
         description: 'Force-refresh the cached stock list and recent bars (default false).',
       },
-      industries: {
-        type: 'array',
-        items: { type: 'string' },
-        description:
-          'Optional Shenwan level-1 industry names (exact, e.g. "农林牧渔") to restrict the universe to. ' +
-          'Pass several to screen multiple industries. Requires the Tushare source; the free Eastmoney path ' +
-          'has no industry classification. Call a_share_list_industries first for the exact names.',
-      },
     },
     output: {
       schema: outputSchema,
@@ -133,11 +121,10 @@ export function createScreenTool(deps: ToolDeps): ToolDefinition {
     // writes and multiply data-source load. Serialize tool calls instead.
     isConcurrencySafe: () => false,
     async execute(args, exec) {
-      return runScreen(deps.host, deps.config, deps.registry, deps.limiter, {
+      return runScreen(deps.host, deps.config, deps.dataSource, deps.registry, {
         strategyId: args.strategy,
         params: args.params === undefined ? undefined : (args.params as Record<string, unknown>),
         refresh: args.refresh ?? false,
-        industries: args.industries === undefined ? undefined : (args.industries as string[]),
         signal: exec.signal,
       })
     },
@@ -200,54 +187,6 @@ export function createListStrategiesTool(deps: ToolDeps): ToolDefinition {
     presentCall: () => ({
       card: 'generic',
       title: 'List A-share screening strategies',
-    }),
-  })
-}
-
-/** Industry discovery tool: exact Shenwan level-1 names usable in a_share_screen. */
-export function createListIndustriesTool(deps: ToolDeps): ToolDefinition {
-  return defineTool({
-    name: 'a_share_list_industries',
-    description:
-      'List the A-share industries (Shenwan level-1) available for industry filtering in a_share_screen, ' +
-      'with the current listed-stock count per industry. Requires the Tushare source (a token). Use the ' +
-      "exact returned name in a_share_screen's industries argument.",
-    parameters: {},
-    output: {
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          industries: {
-            type: 'array',
-            required: true,
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                name: { type: 'string', required: true },
-                count: { type: 'number', required: true },
-              },
-            },
-          },
-        },
-      },
-      render: (_args, value) => [
-        {
-          type: 'text',
-          text: (value as { industries: { name: string; count: number }[] }).industries
-            .map((industry) => `${industry.name} (${industry.count})`)
-            .join('\n'),
-        },
-      ],
-    },
-    timeoutMs: 60_000,
-    async execute(_args, exec) {
-      return listIndustries(deps.host, deps.config, deps.limiter, exec.signal)
-    },
-    presentCall: () => ({
-      card: 'generic',
-      title: 'List A-share industries',
     }),
   })
 }

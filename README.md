@@ -1,6 +1,6 @@
 # dsh-a-share-screener
 
-An [A-share](https://en.wikipedia.org/wiki/Stock_screener) stock-screening plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`): pluggable screening strategies, a Tushare primary data source (your own token), and a free Eastmoney fallback — no token required.
+An [A-share](https://en.wikipedia.org/wiki/Stock_screener) stock-screening plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`): pluggable screening strategies on a free, token-less Eastmoney data source, behind an extensible data-source abstraction.
 
 **This is a technical screening tool for historical price/volume patterns. It is NOT investment advice.**
 
@@ -27,16 +27,6 @@ Start with the profile:
 dsh --profile myprofile
 ```
 
-## Tushare token (optional but recommended)
-
-The plugin's config carries only an **env-var name** (default `TUSHARE_TOKEN`), never the secret. Put your [Tushare Pro](https://tushare.pro/) token in any of:
-
-- a `.env` file in the directory you launch `dsh` from: `TUSHARE_TOKEN=xxxxxxxx`
-- your shell environment: `export TUSHARE_TOKEN=xxxxxxxx`
-- dsh's managed credentials storage (resolved by the credentials layer)
-
-The token resolves at every scan, so rotating it needs no restart. Without a token the plugin automatically uses the free Eastmoney source (see below). You need a token to force `dataSource: 'tushare'`.
-
 ## Use
 
 Ask the agent in natural language:
@@ -59,17 +49,32 @@ The first full scan downloads history into a local disk cache and can take many 
 
 All thresholds are per-call parameters with defaults (see `a_share_list_strategies`). Board-aware limit-up thresholds: 10% main board, 20% ChiNext/STAR, 30% BSE. All price-level math runs on a chained daily-return index, so splits and dividends cannot fake a crash or a bottom. Universe filters (all configurable): ST/delisting names, BSE, listings younger than 365 days.
 
-## Data sources
+## Data source
+
+The plugin ships one free, token-less data source: [Eastmoney](https://www.eastmoney.com/) public endpoints.
 
 | Source | Token | Cold scan | Incremental |
 |---|---|---|---|
-| [Tushare Pro](https://tushare.pro/) (primary) | your own | per-stock `daily`, rate-limited (default 200 req/min) | one `daily` call per new trade date, merged into per-stock cache files |
-| Eastmoney public endpoints (fallback) | none | per-stock back-adjusted klines; clist host fails over realtime → delayed | per-stock append with overlap-consistency check |
-| Tencent quote center (last resort) | none | back-adjusted klines, paged at 640 rows/request | full-window refetch when stale |
+| Eastmoney (built-in) | none | per-stock back-adjusted klines; clist host fails over realtime → delayed | per-stock append with overlap-consistency check |
 
-Free-path behavior: each stock tries eastmoney first, then tencent. A circuit breaker skips eastmoney for the rest of the scan after 3 consecutive failures. Back-adjustment anchors differ between vendors, so each source keeps its own cache directory — series never mix sources.
+Every adapter sits behind a `DataSource` interface (`src/datasources/types.ts`); the screener, tools, and plugin entry import only that interface, never a concrete vendor. Cache lives under `$DSH_HOME/a-share-screener/<source-id>/` (override with `cacheDir`).
 
-Choose with the plugin config `dataSource: auto | tushare | eastmoney` (`auto` = tushare when a token resolves, else the free path). Cache lives under `$DSH_HOME/a-share-screener/` (override with `cacheDir`).
+### Add a data source
+
+To support another vendor later, implement `DataSource` and register it in `src/datasources/index.ts`:
+
+```ts
+// src/datasources/my-vendor.ts
+import type { DataSource } from './types.js'
+
+export function createMyVendorDataSource(limiter: RateLimiter): DataSource {
+  async function listStocks(signal: AbortSignal) { /* → StockMeta[] */ }
+  async function dailyBars(fullCode: string, startDate: string, signal: AbortSignal) { /* → Bar[] */ }
+  return { id: 'my-vendor', capabilities: { industry: false }, listStocks, dailyBars }
+}
+```
+
+add `myvendor: createMyVendorDataSource` to `FACTORIES`. Set `capabilities.industry: true` (and populate `StockMeta.industry`) if the vendor can classify sectors.
 
 ## Plugin configuration
 
@@ -79,8 +84,7 @@ Set in your profile's `cordis.patch.yml` (all fields have defaults):
 - replace:
     - id: a-share-screener
       config:
-        tokenEnv: TUSHARE_TOKEN
-        dataSource: auto
+        # cacheDir: /path/to/cache   # optional, defaults to $DSH_HOME/a-share-screener
         requestsPerMinute: 200
         historyBars: 800
         scanTimeoutMs: 1800000
@@ -112,10 +116,10 @@ Register it in `src/index.ts` next to the built-in one — no other changes. The
 
 ## Limitations
 
-- Tushare free tier covers `daily`/`stock_basic`/`trade_cal` at ~200–500 calls/min; the rate limiter defaults to 200 (configurable) and retries rate-limit rejections.
-- Eastmoney/Tencent endpoints are public but undocumented; field drift fails loudly rather than silently, and per-stock source fallback keeps one blocked host from killing a scan.
+- Eastmoney endpoints are public but undocumented; field drift fails loudly rather than silently, and the clist host fails over realtime → delayed so one blocked host does not kill a scan.
+- The Eastmoney source does not classify industries (`capabilities.industry` is false); sector-based screening needs a vendor that provides it.
 - ST filtering uses the current stock name (no historical name-change tracking).
-- Everything runs in the local process; no data leaves your machine except API calls to the chosen source.
+- Everything runs in the local process; no data leaves your machine except API calls to the data source.
 
 ## License
 
