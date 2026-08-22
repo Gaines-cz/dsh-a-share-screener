@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createListStrategiesTool, createScreenTool } from './tool.js'
+import { createListFiltersTool, createListStrategiesTool, createScreenTool } from './tool.js'
+import { createFilterRegistry } from './filters/index.js'
 import type { DataSource } from './datasources/index.js'
 import type { ScreenerConfig, ScreenerHost } from './screener.js'
 import { StrategyRegistry } from './strategies/registry.js'
@@ -24,7 +25,8 @@ const dataSource: DataSource = {
 }
 const registry = new StrategyRegistry()
 registry.register(lowFlatLimitUpStrategy)
-const deps = { host, config, dataSource, registry }
+const filters = createFilterRegistry()
+const deps = { host, config, dataSource, registry, filters }
 
 describe('tool construction', () => {
   it('builds the tools with valid DSL schemas (defineTool compiles them)', () => {
@@ -38,6 +40,16 @@ describe('tool construction', () => {
   it('exposes the registered strategy ids as the parameter enum', () => {
     const screen = createScreenTool(deps)
     expect(JSON.stringify(screen)).toContain('low_flat_limit_up')
+  })
+
+  it('exposes the atomic filters via a_share_list_filters', () => {
+    const listFilters = createListFiltersTool(deps)
+    expect(listFilters.name).toBe('a_share_list_filters')
+    // The discoverable filter ids come from the registry the tool is wired to
+    // (the tool's execute() maps deps.filters.list(), so the ids live there).
+    const ids = deps.filters.ids()
+    expect(ids).toContain('deep_drawdown')
+    expect(ids).toContain('cooldown_pullback')
   })
 })
 

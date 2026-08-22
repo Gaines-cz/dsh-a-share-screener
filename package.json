@@ -21,6 +21,7 @@
     "sync": "node --import tsx/esm src/cli.ts sync",
     "scan": "node --import tsx/esm src/cli.ts scan",
     "strategies": "node --import tsx/esm src/cli.ts strategies",
+    "filters": "node --import tsx/esm src/cli.ts filters",
     "sources": "node --import tsx/esm src/cli.ts sources"
   },
   "engines": {

@@ -34,11 +34,12 @@ dsh --profile myprofile
 > 列出可用的选股策略。
 > 用 low_flat_limit_up 扫全市场，minDrawdownFromHigh 0.7。
 
-注册了两个工具：
+注册了三个工具：
 
 | 工具 | 用途 |
 |---|---|
 | `a_share_list_strategies` | 策略 id、描述、参数、默认值与合法范围 |
+| `a_share_list_filters` | 原子过滤器 id、描述、参数、默认值与合法范围 |
 | `a_share_screen` | 全市场扫描；返回候选股及量化证据 |
 
 首次全量扫描会下载历史数据到本地磁盘缓存，耗时数分钟（受数据源限速约束）；之后复用缓存、只增量拉取新交易日。取消是协作式的——中止工具调用即停止扫描。
@@ -120,8 +121,11 @@ export const myStrategy: Strategy = {
 
 ```sh
 pnpm install
-pnpm sync    # 每周一次: 增量同步本地行情缓存 (默认全市场; 用 --board / --codes 缩小范围)
-pnpm scan    # 选股: 生成分层报告 (严格命中 + 近邻候选)
+pnpm sync        # 每周一次: 增量同步本地行情缓存 (默认全市场; 用 --board / --codes 缩小范围)
+pnpm scan        # 选股: 生成分层报告 (严格命中 + 近邻候选)
+pnpm strategies  # 列出策略 id 及参数表
+pnpm filters     # 列出原子过滤器 id 及参数表
+pnpm sources     # 列出数据源 id
 ```
 
 常用选项:
@@ -138,7 +142,7 @@ pnpm scan    # 选股: 生成分层报告 (严格命中 + 近邻候选)
 
 `pnpm scan` 把报告写到 `reports/<日期>-<策略>-<范围>.md` (+ `.json`)。报告分两层:
 
-- **严格命中**: 四道闸门全过;
+- **严格命中**: 五道闸门全过;
 - **近邻候选**: 只差一道闸的票, 每只标明各闸门的量化指标和卡在哪一道 —— 专为人工二次甄别设计 (严格条件常为 0 命中, 近邻层保证每次都有可甄别的候选)。
 
 ## 已知限制

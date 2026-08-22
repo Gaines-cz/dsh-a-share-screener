@@ -1,10 +1,12 @@
 /**
- * Model-facing tools: `a_share_screen` (full market scan) and
- * `a_share_list_strategies` (strategy discovery).
+ * Model-facing tools: `a_share_screen` (full market scan),
+ * `a_share_list_strategies` (strategy discovery), and `a_share_list_filters`
+ * (atomic-filter discovery).
  * @module a-share-screener/tool
  */
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { DataSource } from './datasources/index.js'
+import type { FilterRegistry } from './engine/types.js'
 import type { ScreenResultView, ScreenerConfig, ScreenerHost } from './screener.js'
 import { runScreen } from './screener.js'
 import type { StrategyRegistry } from './strategies/registry.js'
@@ -14,6 +16,7 @@ interface ToolDeps {
   config: ScreenerConfig
   dataSource: DataSource
   registry: StrategyRegistry
+  filters: FilterRegistry
 }
 
 /** Human/model-readable text report from a canonical scan result. */
@@ -26,18 +29,23 @@ function renderReport(value: ScreenResultView): string {
   )
   if (value.candidates.length > 0) {
     lines.push('')
-    lines.push('code     name             board    limit-up   surge   cooldown  days  close')
+    lines.push('code     name             board    limit-up   surge   cooldown  cool-ref    days  close')
     for (const hit of value.candidates) {
       const evidence = hit.evidence as Record<string, number | string>
       lines.push(
         `${hit.code}  ${hit.name.padEnd(12).slice(0, 12)}  ${hit.board.padEnd(7)}  ` +
           `${String(evidence.limitUpDate ?? '-')}  ${String(evidence.limitUpVolumeSurge ?? '-').padStart(4)}x  ` +
-          `${String(evidence.cooldownVolumeRatio ?? '-').padStart(7)}  ${String(evidence.daysSinceLimitUp ?? '-').padStart(4)}  ` +
+          `${String(evidence.cooldownVolumeRatio ?? '-').padStart(7)}  ${String(evidence.cooldownRefDate ?? '-')}  ` +
+          `${String(evidence.daysSinceLimitUp ?? '-').padStart(4)}  ` +
           `${evidence.close ?? '-'}`,
       )
     }
     lines.push('')
-    lines.push('Each candidate carries full evidence fields (drawdown, percentile, flat metrics) in its result entry.')
+    lines.push(
+      'limit-up/surge cite the most recent volume-heavy limit-up day; cooldown/cool-ref/days cite the day that ' +
+        'also satisfies the pullback+cooldown pattern — the two may differ when only an older day qualifies. ' +
+        'Each candidate carries full evidence fields (drawdown, percentile, flat metrics) in its result entry.',
+    )
   } else {
     lines.push('No stock matched this strategy with the given parameters.')
   }
@@ -187,6 +195,58 @@ export function createListStrategiesTool(deps: ToolDeps): ToolDefinition {
     presentCall: () => ({
       card: 'generic',
       title: 'List A-share screening strategies',
+    }),
+  })
+}
+
+/** Atomic-filter discovery tool: the composable conditions strategies are built from. */
+export function createListFiltersTool(deps: ToolDeps): ToolDefinition {
+  return defineTool({
+    name: 'a_share_list_filters',
+    description:
+      'List the available atomic A-share screening filters (composable conditions such as deep drawdown, ' +
+      'low percentile, flat base, volume limit-up, and cooldown pullback) with their descriptions, parameters, ' +
+      'defaults, and valid ranges. Strategies are built by combining these filters.',
+    parameters: {},
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          filters: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: true,
+              properties: {
+                id: { type: 'string', required: true },
+                description: { type: 'string', required: true },
+                params: { type: 'object', additionalProperties: true, required: true },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [
+        {
+          type: 'text',
+          text: JSON.stringify((value as { filters: unknown[] }).filters, null, 2),
+        },
+      ],
+    },
+    async execute() {
+      return {
+        filters: deps.filters.list().map((filter) => ({
+          id: filter.id,
+          description: filter.description,
+          params: filter.paramDocs,
+        })),
+      }
+    },
+    presentCall: () => ({
+      card: 'generic',
+      title: 'List A-share screening filters',
     }),
   })
 }

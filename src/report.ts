@@ -37,12 +37,13 @@ export function tierResults(entries: TieredEntry[]): TieredResult {
   return { hits, nearMisses, others }
 }
 
-/** Human-readable names for the low_flat_limit_up gates. */
+/** Human-readable names for the atomic-filter gates. */
 const GATE_LABELS: Record<string, string> = {
-  drawdown: '距高点回撤',
-  percentile: '历史分位',
-  flat: '平台走平+均线收敛',
-  limitUp: '放量涨停回落缩量',
+  deep_drawdown: '距高点回撤',
+  low_percentile: '历史分位',
+  flat_base: '平台走平+均线收敛',
+  volume_limit_up: '放量涨停',
+  cooldown_pullback: '涨停后回落缩量',
 }
 
 export function gateLabel(gate: string): string {
@@ -58,19 +59,27 @@ function fmt(v: number | string | boolean | null | undefined, digits = 2): strin
 function gateLine(entry: TieredEntry): string {
   const m = entry.diagnosis.metrics
   const gates = entry.diagnosis.gates
-  const pct = (v: number | string | boolean | null | undefined): string => `${(Number(v ?? 0) * 100).toFixed(1)}%`
+  const pct = (v: number | string | boolean | null | undefined): string =>
+    v === null || v === undefined ? '-' : `${(Number(v) * 100).toFixed(1)}%`
+  const drawdown = (v: number | string | boolean | null | undefined): string =>
+    v === null || v === undefined ? '-' : `-${(Number(v) * 100).toFixed(1)}%`
   const parts: string[] = []
   const push = (label: string, value: string, pass: boolean | undefined): void => {
     parts.push(`${label}${value}${pass === true ? '✓' : '✗'}`)
   }
-  push('距高点', `-${pct(m.drawdownFromHigh)}`, gates.drawdown)
-  push('分位', pct(m.percentileInWindow), gates.percentile)
-  push('平台净变动', pct(m.flatNetChange), gates.flat)
+  push('距高点', drawdown(m.drawdownFromHigh), gates.deep_drawdown)
+  push('分位', pct(m.percentileInWindow), gates.low_percentile)
+  push('平台净变动', pct(m.flatNetChange), gates.flat_base)
   push(
     '放量涨停',
     m.limitUpDate === null || m.limitUpDate === undefined ? '-' : `${m.limitUpDate}(${fmt(m.limitUpVolumeSurge, 1)}x)`,
-    gates.limitUp,
+    gates.volume_limit_up,
   )
+  // The cooldown metrics cite their own reference day (cooldownRefDate), which
+  // may be an older limit-up day than limitUpDate — flag it when they diverge.
+  const coolRef = m.cooldownRefDate === null || m.cooldownRefDate === undefined ? null : String(m.cooldownRefDate)
+  const coolRefSuffix = coolRef !== null && coolRef !== String(m.limitUpDate ?? '') ? `@${coolRef}` : ''
+  push('回落缩量', `${pct(m.cooldownVolumeRatio)}${coolRefSuffix}`, gates.cooldown_pullback)
   return parts.join(' ')
 }
 
