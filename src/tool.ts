@@ -1,10 +1,12 @@
 /**
- * Model-facing tools: `a_share_screen` (full market scan) and
- * `a_share_list_strategies` (strategy discovery).
+ * Model-facing tools: `a_share_screen` (full market scan),
+ * `a_share_list_strategies` (strategy discovery), and `a_share_list_filters`
+ * (atomic-filter discovery).
  * @module a-share-screener/tool
  */
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { DataSource } from './datasources/index.js'
+import type { FilterRegistry } from './engine/types.js'
 import type { ScreenResultView, ScreenerConfig, ScreenerHost } from './screener.js'
 import { runScreen } from './screener.js'
 import type { StrategyRegistry } from './strategies/registry.js'
@@ -14,6 +16,7 @@ interface ToolDeps {
   config: ScreenerConfig
   dataSource: DataSource
   registry: StrategyRegistry
+  filters: FilterRegistry
 }
 
 /** Human/model-readable text report from a canonical scan result. */
@@ -187,6 +190,58 @@ export function createListStrategiesTool(deps: ToolDeps): ToolDefinition {
     presentCall: () => ({
       card: 'generic',
       title: 'List A-share screening strategies',
+    }),
+  })
+}
+
+/** Atomic-filter discovery tool: the composable conditions strategies are built from. */
+export function createListFiltersTool(deps: ToolDeps): ToolDefinition {
+  return defineTool({
+    name: 'a_share_list_filters',
+    description:
+      'List the available atomic A-share screening filters (composable conditions such as deep drawdown, ' +
+      'low percentile, flat base, volume limit-up, and cooldown pullback) with their descriptions, parameters, ' +
+      'defaults, and valid ranges. Strategies are built by combining these filters.',
+    parameters: {},
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          filters: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: true,
+              properties: {
+                id: { type: 'string', required: true },
+                description: { type: 'string', required: true },
+                params: { type: 'object', additionalProperties: true, required: true },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [
+        {
+          type: 'text',
+          text: JSON.stringify((value as { filters: unknown[] }).filters, null, 2),
+        },
+      ],
+    },
+    async execute() {
+      return {
+        filters: deps.filters.list().map((filter) => ({
+          id: filter.id,
+          description: filter.description,
+          params: filter.paramDocs,
+        })),
+      }
+    },
+    presentCall: () => ({
+      card: 'generic',
+      title: 'List A-share screening filters',
     }),
   })
 }

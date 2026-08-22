@@ -4,6 +4,7 @@
  *   pnpm sync         增量同步本地行情缓存 (每周一次; 全市场默认)
  *   pnpm scan         按策略扫描, 生成分层报告 (严格命中 + 近邻候选)
  *   pnpm strategies   列出可用策略与参数
+ *   pnpm filters      列出可用原子过滤器与参数
  *   pnpm sources      列出可用数据源
  *
  * 手动触发、本地缓存、免费数据源 (新浪主 / 东财回退 / 腾讯备胎), 无需 token。
@@ -15,6 +16,7 @@ import { parseArgs, type ParseArgsConfig } from 'node:util'
 import { defaultCacheDir } from './cache.js'
 import { boardMemberCodes, findBoard, suggestBoards } from './datasources/boards.js'
 import { createDataSource, type DataSourceId } from './datasources/index.js'
+import { createFilterRegistry } from './filters/index.js'
 import { RateLimiter } from './http.js'
 import { renderJson, renderMarkdown, tierResults, type ReportContext, type TieredEntry } from './report.js'
 import {
@@ -137,6 +139,7 @@ function printHelp(): void {
   pnpm sync [选项]                 增量同步本地行情缓存 (每周一次)
   pnpm scan [选项]                 按策略扫描并生成分层报告
   pnpm strategies                  列出可用策略与参数
+  pnpm filters                     列出可用原子过滤器与参数
   pnpm sources                     列出可用数据源
   pnpm cli help                    显示本帮助
 
@@ -282,6 +285,15 @@ async function cmdStrategies(): Promise<void> {
   }
 }
 
+async function cmdFilters(): Promise<void> {
+  const filters = createFilterRegistry()
+  for (const filter of filters.list()) {
+    console.log(`\n# ${filter.id}`)
+    console.log(filter.description)
+    console.log(JSON.stringify(filter.paramDocs, null, 2))
+  }
+}
+
 async function cmdSources(): Promise<void> {
   for (const [id, note] of Object.entries(SOURCE_NOTES)) {
     console.log(`- ${id}: ${note}`)
@@ -304,6 +316,9 @@ async function main(): Promise<void> {
     case 'strategies':
       await cmdStrategies()
       break
+    case 'filters':
+      await cmdFilters()
+      break
     case 'sources':
       await cmdSources()
       break
@@ -312,7 +327,7 @@ async function main(): Promise<void> {
       printHelp()
       break
     default:
-      console.error(`未知命令 '${command}'. 可用: sync, scan, strategies, sources, help`)
+      console.error(`未知命令 '${command}'. 可用: sync, scan, strategies, filters, sources, help`)
       process.exit(2)
   }
 }

@@ -10,8 +10,14 @@ function stock(code: string, name: string): StockMeta {
 function diag(overrides: Partial<StrategyDiagnosis>): StrategyDiagnosis {
   return {
     matched: false,
-    gates: { drawdown: true, percentile: true, flat: true, limitUp: false },
-    failedGates: ['limitUp'],
+    gates: {
+      deep_drawdown: true,
+      low_percentile: true,
+      flat_base: true,
+      volume_limit_up: true,
+      cooldown_pullback: false,
+    },
+    failedGates: ['cooldown_pullback'],
     metrics: {
       close: 10,
       drawdownFromHigh: 0.62,
@@ -30,10 +36,23 @@ function diag(overrides: Partial<StrategyDiagnosis>): StrategyDiagnosis {
 
 describe('report tiering', () => {
   it('splits hits, single-gate near-misses and the rest', () => {
+    const allPass = {
+      deep_drawdown: true,
+      low_percentile: true,
+      flat_base: true,
+      volume_limit_up: true,
+      cooldown_pullback: true,
+    }
     const entries: TieredEntry[] = [
-      { stock: stock('600001', 'A'), diagnosis: diag({ matched: true, gates: { drawdown: true, percentile: true, flat: true, limitUp: true }, failedGates: [] }) },
-      { stock: stock('600002', 'B'), diagnosis: diag({}) }, // only limitUp fails
-      { stock: stock('600003', 'C'), diagnosis: diag({ gates: { drawdown: false, percentile: false, flat: true, limitUp: true }, failedGates: ['drawdown', 'percentile'] }) },
+      { stock: stock('600001', 'A'), diagnosis: diag({ matched: true, gates: allPass, failedGates: [] }) },
+      { stock: stock('600002', 'B'), diagnosis: diag({}) }, // only cooldown_pullback fails
+      {
+        stock: stock('600003', 'C'),
+        diagnosis: diag({
+          gates: { deep_drawdown: false, low_percentile: false, flat_base: true, volume_limit_up: true, cooldown_pullback: true },
+          failedGates: ['deep_drawdown', 'low_percentile'],
+        }),
+      },
     ]
     const tiered = tierResults(entries)
     expect(tiered.hits.map((e) => e.stock.code)).toEqual(['600001'])
@@ -50,8 +69,10 @@ describe('report tiering', () => {
     expect(tiered.nearMisses.map((e) => e.stock.code)).toEqual(['600003', '600002'])
   })
 
-  it('maps gate ids to human labels', () => {
-    expect(gateLabel('drawdown')).toBe('距高点回撤')
+  it('maps filter ids to human labels', () => {
+    expect(gateLabel('deep_drawdown')).toBe('距高点回撤')
+    expect(gateLabel('volume_limit_up')).toBe('放量涨停')
+    expect(gateLabel('cooldown_pullback')).toBe('涨停后回落缩量')
     expect(gateLabel('nope')).toBe('nope')
   })
 })
@@ -81,7 +102,7 @@ describe('report rendering', () => {
     expect(md).toContain('## 二、近邻候选 (1只')
     expect(md).toContain('600002 样例股份')
     expect(md).toContain('距高点-62.0%✓')
-    expect(md).toContain('差在: 放量涨停回落缩量')
+    expect(md).toContain('差在: 涨停后回落缩量')
     expect(md).toContain('不构成投资建议')
   })
 

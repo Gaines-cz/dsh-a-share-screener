@@ -11,11 +11,12 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { createDataSource, type DataSourceId } from './datasources/index.js'
+import { createFilterRegistry } from './filters/index.js'
 import { RateLimiter } from './http.js'
 import type { ScreenerConfig, ScreenerHost } from './screener.js'
 import { StrategyRegistry } from './strategies/registry.js'
 import { registerAll } from './strategies/index.js'
-import { createListStrategiesTool, createScreenTool } from './tool.js'
+import { createListFiltersTool, createListStrategiesTool, createScreenTool } from './tool.js'
 
 export const name = 'a-share-screener'
 
@@ -65,6 +66,7 @@ function log(ctx: Context, level: 'info' | 'warn', message: string): void {
 export function apply(ctx: Context, config: Config): void {
   const registry = new StrategyRegistry()
   registerAll(registry)
+  const filters = createFilterRegistry()
   // One rate budget for the whole plugin lifetime: concurrent scans would
   // otherwise multiply outbound requests against the data source.
   const dataSource = createDataSource(config.dataSource, new RateLimiter(config.requestsPerMinute))
@@ -74,7 +76,9 @@ export function apply(ctx: Context, config: Config): void {
     config: config as ScreenerConfig,
     dataSource,
     registry,
+    filters,
   }
   ctx.tools.register(createListStrategiesTool(deps))
+  ctx.tools.register(createListFiltersTool(deps))
   ctx.tools.register(createScreenTool(deps))
 }
