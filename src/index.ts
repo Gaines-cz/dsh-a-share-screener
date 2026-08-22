@@ -1,14 +1,16 @@
 /**
  * Plugin entry: registers the screening tools with the harness tool registry.
  *
- * The screener is data-source agnostic; it talks to a single free Eastmoney
- * source built via {@link createDataSource}. Adding another vendor means
+ * The screener is data-source agnostic; the source is chosen through the
+ * `dataSource` config (default `sina` — the free primary source whose 前复权
+ * closes match market prices; `eastmoney` klines are TLS-blocked on some
+ * networks, `tencent` is a 后复权 fallback). Adding another vendor means
  * implementing {@link DataSource} and registering it there — no changes here.
  * @module a-share-screener
  */
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
-import { createDataSource } from './datasources/index.js'
+import { createDataSource, type DataSourceId } from './datasources/index.js'
 import { RateLimiter } from './http.js'
 import type { ScreenerConfig, ScreenerHost } from './screener.js'
 import { StrategyRegistry } from './strategies/registry.js'
@@ -22,6 +24,8 @@ export const inject = ['tools']
 export interface Config {
   /** Cache directory; defaults to $DSH_HOME/a-share-screener (~/.dsh fallback). */
   cacheDir?: string | null
+  /** Data source for stock list + klines. Default `sina`. */
+  dataSource: DataSourceId
   /** Outbound request budget shared by every data-source call. */
   requestsPerMinute: number
   /** Trading-day bars kept per stock (window for high/percentile lookback). */
@@ -38,6 +42,7 @@ export interface Config {
 
 export const Config: Schema<Config> = Schema.object({
   cacheDir: Schema.string(),
+  dataSource: Schema.union(['sina', 'eastmoney', 'tencent']).default('sina'),
   requestsPerMinute: Schema.number().min(30).max(1000).default(200),
   historyBars: Schema.number().min(250).max(3000).default(800),
   excludeST: Schema.boolean().default(true),
@@ -62,7 +67,7 @@ export function apply(ctx: Context, config: Config): void {
   registerAll(registry)
   // One rate budget for the whole plugin lifetime: concurrent scans would
   // otherwise multiply outbound requests against the data source.
-  const dataSource = createDataSource('eastmoney', new RateLimiter(config.requestsPerMinute))
+  const dataSource = createDataSource(config.dataSource, new RateLimiter(config.requestsPerMinute))
   const host: ScreenerHost = { log: (level, message) => log(ctx, level, message) }
   const deps = {
     host,
