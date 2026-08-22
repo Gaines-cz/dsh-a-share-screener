@@ -137,20 +137,35 @@ function cacheDirOf(config: ScreenerConfig): string {
 /**
  * Stock list + universe filters (ST/BSE/recent-listing), refreshing the cached
  * list at most once per day. Shared by scanning and syncing.
+ *
+ * The list fetch is failure-tolerant: when the source's list endpoint is down
+ * but a cached `stocks.json` exists (even stale), the run proceeds on the
+ * cached universe with a warning instead of aborting — the list is only
+ * metadata, and bar fetching is what actually needs the live source.
  */
 async function prepareUniverse(
   config: ScreenerConfig,
   dataSource: DataSource,
   signal: AbortSignal,
   refresh: boolean,
+  warn: (message: string) => void = () => undefined,
 ): Promise<{ stocks: StockMeta[]; skipped: Record<string, number>; today: string }> {
   const stocksFile = join(cacheDirOf(config), 'stocks.json')
   const today = todayYmd()
   let stocksCache = await readJson<StocksCache>(stocksFile)
   if (refresh || !stocksCache || (stocksCache.fetchedAt ?? '') < today) {
-    const stocks = await dataSource.listStocks(signal)
-    stocksCache = { fetchedAt: today, stocks }
-    await writeJson(stocksFile, stocksCache)
+    try {
+      const stocks = await dataSource.listStocks(signal)
+      stocksCache = { fetchedAt: today, stocks }
+      await writeJson(stocksFile, stocksCache)
+    } catch (err) {
+      if (signal.aborted) throw err
+      if (stocksCache === undefined) throw err // no cache to fall back on
+      warn(
+        `stock list fetch failed (${err instanceof Error ? err.message : String(err)}); ` +
+          `using cached list from ${stocksCache.fetchedAt ?? 'unknown date'}`,
+      )
+    }
   }
 
   const skipped: Record<string, number> = {}
@@ -275,7 +290,7 @@ export async function runScreen(
   }
   const params = registry.resolveParams(args.strategyId, args.params)
 
-  const { stocks: filtered, skipped, today } = await prepareUniverse(config, dataSource, args.signal, args.refresh ?? false)
+  const { stocks: filtered, skipped, today } = await prepareUniverse(config, dataSource, args.signal, args.refresh ?? false, (m) => host.log('warn', m))
   const universe = filterByCodes(filtered, args.codes, skipped)
   host.log('info', `universe after filters: ${universe.length} (skipped ${JSON.stringify(skipped)})`)
 
@@ -334,7 +349,7 @@ export async function syncBars(
   args: { refresh?: boolean; codes?: string[]; concurrency?: number; signal: AbortSignal },
 ): Promise<{ scanned: number; stocksFetched: number; skipped: Record<string, number>; startDate: string }> {
   const startedAt = Date.now()
-  const { stocks: filtered, skipped, today } = await prepareUniverse(config, dataSource, args.signal, args.refresh ?? false)
+  const { stocks: filtered, skipped, today } = await prepareUniverse(config, dataSource, args.signal, args.refresh ?? false, (m) => host.log('warn', m))
   const universe = filterByCodes(filtered, args.codes, skipped)
   host.log('info', `sync: ${universe.length} stocks to refresh via ${dataSource.id}`)
 

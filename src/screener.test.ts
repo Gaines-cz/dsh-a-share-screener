@@ -228,4 +228,29 @@ describe('runScreen failure modes', () => {
       }),
     ).rejects.toThrow(/must be an integer/)
   })
+
+  it('falls back to the cached stock list when the list endpoint fails', async () => {
+    const dir = await tempDir()
+    listStocks.mockResolvedValue([stock('600001', '好公司', 'main', '20100101')])
+    dailyBars.mockResolvedValue(fixtureBars())
+    const signal = new AbortController().signal
+    const first = await scan(dir, config(dir), { strategyId: 'low_flat_limit_up', signal })
+    expect(first.scanned).toBe(1)
+
+    // List endpoint now dead; a forced refresh must still run on the cached list.
+    listStocks.mockRejectedValue(new Error('list host down'))
+    dailyBars.mockClear()
+    const second = await scan(dir, config(dir), { strategyId: 'low_flat_limit_up', refresh: true, signal })
+    expect(second.scanned).toBe(1)
+    expect(second.matched).toBe(1)
+    expect(dailyBars).not.toHaveBeenCalled() // bars already cached with a fresh tail
+  })
+
+  it('throws when the list endpoint fails and no cache exists', async () => {
+    const dir = await tempDir()
+    listStocks.mockRejectedValue(new Error('list host down'))
+    await expect(
+      scan(dir, config(dir), { strategyId: 'low_flat_limit_up', signal: new AbortController().signal }),
+    ).rejects.toThrow(/list host down/)
+  })
 })

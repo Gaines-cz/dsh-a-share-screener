@@ -4,6 +4,11 @@
  * N bars (max 1023, roughly four trading years), so a stock's whole window is
  * a single call. Prices are 前复权 (latest close ≈ market price).
  *
+ * Volume unit: Sina reports shares (股); the adapter converts to lots (手,
+ * volume / 100) to match the domain convention and the tencent source. Verified
+ * against real responses on 600519 (2026-08-19..21): sina volume/100 equals
+ * tencent's 手-denominated volume exactly.
+ *
  * Sina publishes no listing-date-bearing full-market list endpoint, so the
  * stock list is served by the Eastmoney clist endpoint via
  * {@link fetchEastmoneyStockList} — same metadata the eastmoney adapter uses.
