@@ -75,7 +75,11 @@ function gateLine(entry: TieredEntry): string {
     m.limitUpDate === null || m.limitUpDate === undefined ? '-' : `${m.limitUpDate}(${fmt(m.limitUpVolumeSurge, 1)}x)`,
     gates.volume_limit_up,
   )
-  push('回落缩量', fmt(m.cooldownVolumeRatio, 2), gates.cooldown_pullback)
+  // The cooldown metrics cite their own reference day (cooldownRefDate), which
+  // may be an older limit-up day than limitUpDate — flag it when they diverge.
+  const coolRef = m.cooldownRefDate === null || m.cooldownRefDate === undefined ? null : String(m.cooldownRefDate)
+  const coolRefSuffix = coolRef !== null && coolRef !== String(m.limitUpDate ?? '') ? `@${coolRef}` : ''
+  push('回落缩量', `${pct(m.cooldownVolumeRatio)}${coolRefSuffix}`, gates.cooldown_pullback)
   return parts.join(' ')
 }
 

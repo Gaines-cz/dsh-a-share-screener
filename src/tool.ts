@@ -29,18 +29,23 @@ function renderReport(value: ScreenResultView): string {
   )
   if (value.candidates.length > 0) {
     lines.push('')
-    lines.push('code     name             board    limit-up   surge   cooldown  days  close')
+    lines.push('code     name             board    limit-up   surge   cooldown  cool-ref    days  close')
     for (const hit of value.candidates) {
       const evidence = hit.evidence as Record<string, number | string>
       lines.push(
         `${hit.code}  ${hit.name.padEnd(12).slice(0, 12)}  ${hit.board.padEnd(7)}  ` +
           `${String(evidence.limitUpDate ?? '-')}  ${String(evidence.limitUpVolumeSurge ?? '-').padStart(4)}x  ` +
-          `${String(evidence.cooldownVolumeRatio ?? '-').padStart(7)}  ${String(evidence.daysSinceLimitUp ?? '-').padStart(4)}  ` +
+          `${String(evidence.cooldownVolumeRatio ?? '-').padStart(7)}  ${String(evidence.cooldownRefDate ?? '-')}  ` +
+          `${String(evidence.daysSinceLimitUp ?? '-').padStart(4)}  ` +
           `${evidence.close ?? '-'}`,
       )
     }
     lines.push('')
-    lines.push('Each candidate carries full evidence fields (drawdown, percentile, flat metrics) in its result entry.')
+    lines.push(
+      'limit-up/surge cite the most recent volume-heavy limit-up day; cooldown/cool-ref/days cite the day that ' +
+        'also satisfies the pullback+cooldown pattern — the two may differ when only an older day qualifies. ' +
+        'Each candidate carries full evidence fields (drawdown, percentile, flat metrics) in its result entry.',
+    )
   } else {
     lines.push('No stock matched this strategy with the given parameters.')
   }

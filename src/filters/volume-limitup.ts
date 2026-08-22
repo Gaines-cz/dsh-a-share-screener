@@ -12,7 +12,8 @@ import { findVolumeHeavyLimitUp, limitUpSearchParamDocs } from './limitup-search
 export const volumeLimitUpFilter: Filter = {
   id: 'volume_limit_up',
   description:
-    'Within the last `limitUpWindowBars` bars there is a close-at-limit-up day whose volume is at least `minVolumeSurge` times the prior 5-bar average.',
+    'Within the last `limitUpWindowBars` bars there is a close-at-limit-up day whose volume is at least `minVolumeSurge` times the prior 5-bar average. ' +
+    'Evidence (limitUpDate / limitUpPct / limitUpVolumeSurge) always cites the MOST RECENT such day; cooldown_pullback may cite a different, older day.',
   paramDocs: { ...limitUpSearchParamDocs },
   apply(ctx: DerivedCtx, params: StrategyParams): FilterResult {
     const found = findVolumeHeavyLimitUp(ctx, params)

@@ -26,6 +26,7 @@ function diag(overrides: Partial<StrategyDiagnosis>): StrategyDiagnosis {
       flatMaSpread: 0.02,
       limitUpDate: '20260522',
       limitUpVolumeSurge: 2.6,
+      cooldownRefDate: '20260522',
       cooldownVolumeRatio: 0.2,
       daysSinceLimitUp: 60,
       barsAnalyzed: 800,
@@ -121,5 +122,22 @@ describe('report rendering', () => {
     })
     expect(md).toContain('平台净变动-')
     expect(md).not.toContain('平台净变动0.0%')
+  })
+
+  it('renders cooldown ratio as a percentage', () => {
+    const md = renderMarkdown(ctx)
+    expect(md).toContain('回落缩量20.0%✗')
+    expect(md).not.toContain('回落缩量0.2')
+  })
+
+  it('flags the cooldown reference day when it differs from the limit-up day', () => {
+    const crossDay = diag({
+      metrics: { ...diag({}).metrics, cooldownRefDate: '20260301' },
+    })
+    const md = renderMarkdown({
+      ...ctx,
+      tiered: { hits: [], nearMisses: [{ stock: stock('600002', '样例股份'), diagnosis: crossDay }], others: 0 },
+    })
+    expect(md).toContain('回落缩量20.0%@20260301')
   })
 })

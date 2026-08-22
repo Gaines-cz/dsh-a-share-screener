@@ -68,7 +68,12 @@ export interface PredicateResult {
   passed: boolean
   /** Final truth value of every leaf filter (unaffected by any surrounding NOT). */
   gates: Record<string, boolean>
-  /** Leaf filters that failed (drives near-miss reporting, especially for AND trees). */
+  /**
+   * Leaf filters that failed (drives near-miss reporting, especially for AND trees).
+   * Caveat: an AND that fails only through a NOT(child) branch reports no failed
+   * leaf — the child's raw failure is not itself a gate failure — so tierResults
+   * buckets such stocks into "others" without an explanation.
+   */
   failed: string[]
   evidence: Evidence
 }

@@ -45,6 +45,9 @@ describe('cooldown_pullback', () => {
     const result = cooldownPullbackFilter.apply(derive(META, bars), params())
     expect(result.passed).toBe(true)
     expect(result.evidence.daysSinceLimitUp).toBe(19) // found index 20, not 27
+    // The cooldown evidence must cite its own reference day, so a consumer can
+    // tell it apart from volume_limit_up's (more recent) limitUpDate.
+    expect(result.evidence.cooldownRefDate).toBe(bars[20]!.date)
   })
 
   it('excludes a limit-up day that sits inside the cooldown window (minAfter = cooldownBars + 1)', () => {

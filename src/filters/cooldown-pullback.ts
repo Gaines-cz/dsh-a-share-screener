@@ -12,7 +12,8 @@ import { iterVolumeHeavyLimitUp, limitUpSearchParamDocs } from './limitup-search
 export const cooldownPullbackFilter: Filter = {
   id: 'cooldown_pullback',
   description:
-    'After the volume-heavy limit-up day, the price pulled back below that close and the recent `cooldownBars` average volume is at most `maxCooldownVolumeRatio` of the limit-up day volume.',
+    'After the volume-heavy limit-up day, the price pulled back below that close and the recent `cooldownBars` average volume is at most `maxCooldownVolumeRatio` of the limit-up day volume. ' +
+    'Evidence (cooldownRefDate / cooldownVolumeRatio / daysSinceLimitUp) cites the most recent day that also satisfies this pattern — which may be an OLDER day than the one volume_limit_up cites.',
   paramDocs: {
     ...limitUpSearchParamDocs,
     maxCooldownVolumeRatio: {
@@ -52,9 +53,16 @@ export const cooldownPullbackFilter: Filter = {
       const cooldownRatio = cooldownAvg / limitUpVolume
       return {
         passed: true,
-        evidence: { cooldownVolumeRatio: round(cooldownRatio, 4), daysSinceLimitUp: ctx.last - day.index },
+        evidence: {
+          cooldownRefDate: day.date,
+          cooldownVolumeRatio: round(cooldownRatio, 4),
+          daysSinceLimitUp: ctx.last - day.index,
+        },
       }
     }
-    return { passed: false, evidence: { cooldownVolumeRatio: null, daysSinceLimitUp: null } }
+    return {
+      passed: false,
+      evidence: { cooldownRefDate: null, cooldownVolumeRatio: null, daysSinceLimitUp: null },
+    }
   },
 }

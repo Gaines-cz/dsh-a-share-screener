@@ -34,11 +34,12 @@ Ask the agent in natural language:
 > List the available screening strategies.
 > Screen all A-shares with low_flat_limit_up, minDrawdownFromHigh 0.7.
 
-Two tools are registered:
+Three tools are registered:
 
 | Tool | Purpose |
 |---|---|
 | `a_share_list_strategies` | Strategy ids, descriptions, parameters, defaults, valid ranges |
+| `a_share_list_filters` | Atomic filter ids, descriptions, parameters, defaults, valid ranges |
 | `a_share_screen` | Full-market scan; returns candidates with quantified evidence |
 
 The first full scan downloads history into a local disk cache and can take many minutes (bounded by the data source's rate limit); later scans reuse the cache and only fetch new trade dates. Cancellation is cooperative — aborting the tool call stops the scan.
@@ -120,8 +121,11 @@ The same code ships a standalone command-line tool: manual trigger, local bar ca
 
 ```sh
 pnpm install
-pnpm sync    # incremental local cache sync (weekly); default full market, narrow with --board / --codes
-pnpm scan    # tiered report: strict hits + near-miss candidates, each with gate-level metrics
+pnpm sync        # incremental local cache sync (weekly); default full market, narrow with --board / --codes
+pnpm scan        # tiered report: strict hits + near-miss candidates, each with gate-level metrics
+pnpm strategies  # list strategy ids and their parameter tables
+pnpm filters     # list atomic filter ids and their parameter tables
+pnpm sources     # list data source ids
 ```
 
 Common options: `--source sina|eastmoney|tencent`, `--board <name>` (e.g. `--board 核能核电`), `--codes 600519,000858`, `--strategy <id>`, `--params k=v,k2=v2`, `--cache-dir <dir>`, `--out <dir>`.
