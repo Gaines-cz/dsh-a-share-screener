@@ -75,6 +75,21 @@ export interface FetchJsonOptions {
  * jitter. Throws on abort with an AbortError.
  */
 export async function fetchJson(options: FetchJsonOptions): Promise<unknown> {
+  const res = await fetchWithRetry(options)
+  return res.json()
+}
+
+/**
+ * Fetch raw text with rate limiting, timeout, and retry — for endpoints that
+ * answer with non-JSON payloads (e.g. Sina's JSONP kline responses).
+ */
+export async function fetchText(options: FetchJsonOptions): Promise<string> {
+  const res = await fetchWithRetry(options)
+  return res.text()
+}
+
+/** Shared rate-limited, retrying fetch; callers decode the body themselves. */
+async function fetchWithRetry(options: FetchJsonOptions): Promise<Response> {
   const { url, init, limiter, signal } = options
   const timeoutMs = options.timeoutMs ?? 20_000
   const retries = options.retries ?? 3
@@ -88,7 +103,7 @@ export async function fetchJson(options: FetchJsonOptions): Promise<unknown> {
     let permanent = false
     try {
       const res = await fetch(url, { ...init, signal: AbortSignal.any(signals) })
-      if (res.ok) return await res.json()
+      if (res.ok) return res
       lastError = new Error(`HTTP ${res.status} for ${url}`)
       permanent = !(res.status === 429 || res.status >= 500)
     } catch (err) {

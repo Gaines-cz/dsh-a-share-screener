@@ -114,10 +114,24 @@ export const myStrategy: Strategy = {
 
 Register it in `src/index.ts` next to the built-in one — no other changes. The tool schemas and `a_share_list_strategies` pick it up automatically.
 
+## Standalone CLI (no dsh required)
+
+The same code ships a standalone command-line tool: manual trigger, local bar cache, free multi-source data (Sina primary / Eastmoney fallback / Tencent backup), no token.
+
+```sh
+pnpm install
+pnpm sync    # incremental local cache sync (weekly); default full market, narrow with --board / --codes
+pnpm scan    # tiered report: strict hits + near-miss candidates, each with gate-level metrics
+```
+
+Common options: `--source sina|eastmoney|tencent`, `--board <name>` (e.g. `--board 核能核电`), `--codes 600519,000858`, `--strategy <id>`, `--params k=v,k2=v2`, `--cache-dir <dir>`, `--out <dir>`.
+
+`pnpm scan` writes `reports/<date>-<strategy>-<scope>.md` (+ `.json`). The near-miss tier (exactly one gate failed) exists because a strict multi-gate strategy frequently returns zero hits — it keeps every run reviewable.
+
 ## Limitations
 
 - Eastmoney endpoints are public but undocumented; field drift fails loudly rather than silently, and the clist host fails over realtime → delayed so one blocked host does not kill a scan.
-- The Eastmoney source does not classify industries (`capabilities.industry` is false); sector-based screening needs a vendor that provides it.
+- Free sources do not classify industries (`capabilities.industry` is false); sector screening works through the Eastmoney industry/concept board-member endpoint (`--board`).
 - ST filtering uses the current stock name (no historical name-change tracking).
 - Everything runs in the local process; no data leaves your machine except API calls to the data source.
 

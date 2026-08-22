@@ -11,8 +11,8 @@ import Schema from '@deepseek-ai/schemastery'
 import { createDataSource } from './datasources/index.js'
 import { RateLimiter } from './http.js'
 import type { ScreenerConfig, ScreenerHost } from './screener.js'
-import { lowFlatLimitUpStrategy } from './strategies/low-flat-limitup.js'
 import { StrategyRegistry } from './strategies/registry.js'
+import { registerAll } from './strategies/index.js'
 import { createListStrategiesTool, createScreenTool } from './tool.js'
 
 export const name = 'a-share-screener'
@@ -59,7 +59,7 @@ function log(ctx: Context, level: 'info' | 'warn', message: string): void {
 
 export function apply(ctx: Context, config: Config): void {
   const registry = new StrategyRegistry()
-  registry.register(lowFlatLimitUpStrategy)
+  registerAll(registry)
   // One rate budget for the whole plugin lifetime: concurrent scans would
   // otherwise multiply outbound requests against the data source.
   const dataSource = createDataSource('eastmoney', new RateLimiter(config.requestsPerMinute))

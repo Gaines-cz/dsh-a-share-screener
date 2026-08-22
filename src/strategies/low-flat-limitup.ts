@@ -9,7 +9,7 @@
  * @module a-share-screener/strategies/low-flat-limitup
  */
 import { limitUpThreshold, type SeriesBar } from '../types.js'
-import type { Strategy, StrategyHit, StrategyParams, StrategyScreenInput } from './registry.js'
+import type { Strategy, StrategyDiagnosis, StrategyHit, StrategyParams, StrategyScreenInput } from './registry.js'
 
 function round(value: number, digits: number): number {
   const factor = 10 ** digits
@@ -33,6 +33,124 @@ function smaAtIndex(idx: number[], endExclusive: number, n: number): number | nu
   let sum = 0
   for (let i = endExclusive - n; i < endExclusive; i++) sum += idx[i]!
   return sum / n
+}
+
+/** One gate-by-gate evaluation pass shared by `screen` and `diagnose`. */
+export interface LowFlatLimitUpEvaluation {
+  ok: boolean
+  gates: Record<string, boolean>
+  failedGates: string[]
+  metrics: Record<string, number | string | boolean | null>
+}
+
+/**
+ * Evaluate every gate and collect the quantified metrics behind them, so both
+ * `screen` (strict match) and `diagnose` (tiered report) share one
+ * implementation. Returns null when the stock cannot be evaluated at all (too
+ * few bars / flat window unavailable).
+ */
+export function evaluateLowFlatLimitUp(
+  input: StrategyScreenInput,
+  params: StrategyParams,
+): LowFlatLimitUpEvaluation | null {
+  const bars = input.bars
+  const minBars = params.minBars as number
+  if (bars.length < Math.max(60, minBars)) return null
+
+  // Chained return index: idx[i] = prod(1 + ret), immune to ex-rights gaps.
+  const idx: number[] = new Array(bars.length)
+  idx[0] = 1
+  for (let i = 1; i < bars.length; i++) {
+    const ret = bars[i]!.ret
+    idx[i] = idx[i - 1]! * (1 + (ret === null ? 0 : ret))
+  }
+  const last = bars.length - 1
+  const current = idx[last]!
+
+  // A. Historical low: deep drawdown from the window high.
+  let high = -Infinity
+  for (const value of idx) if (value > high) high = value
+  const drawdown = 1 - current / high
+  const gateDrawdown = drawdown >= (params.minDrawdownFromHigh as number)
+
+  // B. Historical low: bottom of the recent distribution.
+  const pw = Math.min(params.percentileWindowBars as number, bars.length)
+  let below = 0
+  for (let i = bars.length - pw; i < bars.length; i++) {
+    if (idx[i]! <= current) below++
+  }
+  const percentile = below / pw
+  const gatePercentile = percentile <= (params.maxPercentile as number)
+
+  // C. Flat base: tiny net change and converged moving averages.
+  const fw = params.flatWindowBars as number
+  if (last < fw) return null
+  const netChange = Math.abs(current / idx[last - fw]! - 1)
+  const maLengths = [5, 10, 20, 60]
+  const mas: number[] = []
+  for (const n of maLengths) {
+    const ma = smaAtIndex(idx, bars.length, n)
+    if (ma === null) return null
+    mas.push(ma)
+  }
+  const maSpread = (Math.max(...mas) - Math.min(...mas)) / Math.min(...mas)
+  const gateFlat = netChange <= (params.maxFlatRangeChange as number) && maSpread <= (params.maxFlatMaSpread as number)
+
+  // D. Volume-heavy limit-up within the window, followed by pullback + cooldown.
+  const threshold = limitUpThreshold(input.stock.board, input.stock.name)
+  const cooldownBars = params.cooldownBars as number
+  const minGap = cooldownBars + 1
+  const firstCandidate = Math.max(5, last - (params.limitUpWindowBars as number))
+  let limitUp: { date: string; pct: number; surge: number; cooldownRatio: number; daysSince: number } | null = null
+  for (let d = last - minGap; d >= firstCandidate; d--) {
+    const ret = bars[d]!.ret
+    if (ret === null || ret < threshold) continue
+    const prevAvg = meanVolume(bars, d - 5, d)
+    if (prevAvg <= 0 || bars[d]!.volume < (params.minVolumeSurge as number) * prevAvg) continue
+    let pulledBack = false
+    for (let e = d + 1; e <= last; e++) {
+      if (idx[e]! < idx[d]!) {
+        pulledBack = true
+        break
+      }
+    }
+    if (!pulledBack) continue
+    const cooldownAvg = meanVolume(bars, last - cooldownBars + 1, last + 1)
+    if (cooldownAvg > (params.maxCooldownVolumeRatio as number) * bars[d]!.volume) continue
+    limitUp = {
+      date: bars[d]!.date,
+      pct: ret,
+      surge: bars[d]!.volume / prevAvg,
+      cooldownRatio: cooldownAvg / bars[d]!.volume,
+      daysSince: last - d,
+    }
+    break
+  }
+  const gateLimitUp = limitUp !== null
+
+  const gates: Record<string, boolean> = {
+    drawdown: gateDrawdown,
+    percentile: gatePercentile,
+    flat: gateFlat,
+    limitUp: gateLimitUp,
+  }
+  const failedGates = Object.entries(gates)
+    .filter(([, pass]) => !pass)
+    .map(([name]) => name)
+  const metrics: Record<string, number | string | boolean | null> = {
+    close: bars[last]!.close,
+    drawdownFromHigh: round(drawdown, 4),
+    percentileInWindow: round(percentile, 4),
+    flatNetChange: round(netChange, 4),
+    flatMaSpread: round(maSpread, 4),
+    limitUpDate: limitUp?.date ?? null,
+    limitUpPct: limitUp === null ? null : round(limitUp.pct, 4),
+    limitUpVolumeSurge: limitUp === null ? null : round(limitUp.surge, 2),
+    cooldownVolumeRatio: limitUp === null ? null : round(limitUp.cooldownRatio, 4),
+    daysSinceLimitUp: limitUp?.daysSince ?? null,
+    barsAnalyzed: bars.length,
+  }
+  return { ok: failedGates.length === 0, gates, failedGates, metrics }
 }
 
 export const lowFlatLimitUpStrategy: Strategy = {
@@ -130,91 +248,22 @@ export const lowFlatLimitUpStrategy: Strategy = {
   },
 
   screen(input: StrategyScreenInput, params: StrategyParams): StrategyHit | null {
-    const bars = input.bars
-    const minBars = params.minBars as number
-    if (bars.length < Math.max(60, minBars)) return null
-
-    // Chained return index: idx[i] = prod(1 + ret), immune to ex-rights gaps.
-    const idx: number[] = new Array(bars.length)
-    idx[0] = 1
-    for (let i = 1; i < bars.length; i++) {
-      const ret = bars[i]!.ret
-      idx[i] = idx[i - 1]! * (1 + (ret === null ? 0 : ret))
+    const ev = evaluateLowFlatLimitUp(input, params)
+    if (ev === null || !ev.ok) return null
+    // A strict match implies the limit-up gate passed, so no metric is null.
+    return {
+      code: input.stock.code,
+      fullCode: input.stock.fullCode,
+      name: input.stock.name,
+      board: input.stock.board,
+      strategy: lowFlatLimitUpStrategy.id,
+      evidence: ev.metrics as Record<string, number | string | boolean>,
     }
-    const last = bars.length - 1
-    const current = idx[last]!
+  },
 
-    // A. Historical low: deep drawdown from the window high.
-    let high = -Infinity
-    for (const value of idx) if (value > high) high = value
-    const drawdown = 1 - current / high
-    if (drawdown < (params.minDrawdownFromHigh as number)) return null
-
-    // B. Historical low: bottom of the recent distribution.
-    const pw = Math.min(params.percentileWindowBars as number, bars.length)
-    let below = 0
-    for (let i = bars.length - pw; i < bars.length; i++) {
-      if (idx[i]! <= current) below++
-    }
-    const percentile = below / pw
-    if (percentile > (params.maxPercentile as number)) return null
-
-    // C. Flat base: tiny net change and converged moving averages.
-    const fw = params.flatWindowBars as number
-    if (last < fw) return null
-    const netChange = Math.abs(current / idx[last - fw]! - 1)
-    if (netChange > (params.maxFlatRangeChange as number)) return null
-    const maLengths = [5, 10, 20, 60]
-    const mas: number[] = []
-    for (const n of maLengths) {
-      const ma = smaAtIndex(idx, bars.length, n)
-      if (ma === null) return null
-      mas.push(ma)
-    }
-    const maSpread = (Math.max(...mas) - Math.min(...mas)) / Math.min(...mas)
-    if (maSpread > (params.maxFlatMaSpread as number)) return null
-
-    // D. Volume-heavy limit-up within the window, followed by pullback + cooldown.
-    const threshold = limitUpThreshold(input.stock.board, input.stock.name)
-    const cooldownBars = params.cooldownBars as number
-    const minGap = cooldownBars + 1
-    const firstCandidate = Math.max(5, last - (params.limitUpWindowBars as number))
-    for (let d = last - minGap; d >= firstCandidate; d--) {
-      const ret = bars[d]!.ret
-      if (ret === null || ret < threshold) continue
-      const prevAvg = meanVolume(bars, d - 5, d)
-      if (prevAvg <= 0 || bars[d]!.volume < (params.minVolumeSurge as number) * prevAvg) continue
-      let pulledBack = false
-      for (let e = d + 1; e <= last; e++) {
-        if (idx[e]! < idx[d]!) {
-          pulledBack = true
-          break
-        }
-      }
-      if (!pulledBack) continue
-      const cooldownAvg = meanVolume(bars, last - cooldownBars + 1, last + 1)
-      if (cooldownAvg > (params.maxCooldownVolumeRatio as number) * bars[d]!.volume) continue
-      return {
-        code: input.stock.code,
-        fullCode: input.stock.fullCode,
-        name: input.stock.name,
-        board: input.stock.board,
-        strategy: lowFlatLimitUpStrategy.id,
-        evidence: {
-          close: bars[last]!.close,
-          drawdownFromHigh: round(drawdown, 4),
-          percentileInWindow: round(percentile, 4),
-          flatNetChange: round(netChange, 4),
-          flatMaSpread: round(maSpread, 4),
-          limitUpDate: bars[d]!.date,
-          limitUpPct: round(ret, 4),
-          limitUpVolumeSurge: round(bars[d]!.volume / prevAvg, 2),
-          cooldownVolumeRatio: round(cooldownAvg / bars[d]!.volume, 4),
-          daysSinceLimitUp: last - d,
-          barsAnalyzed: bars.length,
-        },
-      }
-    }
-    return null
+  diagnose(input: StrategyScreenInput, params: StrategyParams): StrategyDiagnosis | null {
+    const ev = evaluateLowFlatLimitUp(input, params)
+    if (ev === null) return null
+    return { matched: ev.ok, gates: ev.gates, failedGates: ev.failedGates, metrics: ev.metrics }
   },
 }
