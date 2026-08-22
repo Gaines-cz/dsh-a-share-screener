@@ -34,7 +34,9 @@ export const limitUpSearchParamDocs: ParamDocs = {
     min: 1,
     max: 30,
     integer: true,
-    description: 'The limit-up day must be at least this many bars before the latest bar (room to pull back and cool).',
+    description:
+      'The limit-up day must be at least this many bars before the latest bar (room to pull back and cool). ' +
+      'cooldown_pullback enforces at least cooldownBars + 1 so its cooldown window never overlaps the limit-up day.',
   },
 }
 

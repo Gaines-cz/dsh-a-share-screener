@@ -9,6 +9,10 @@ import { meanVolume } from './math.js'
 import type { DerivedCtx, LimitUpDay } from './types.js'
 
 export function derive(stock: StockMeta, bars: SeriesBar[]): DerivedCtx {
+  // Guard against a degenerate empty series: callers reject it via canEvaluate,
+  // but derive is a public engine entry that would otherwise return last = -1
+  // and current = undefined.
+  if (bars.length === 0) throw new Error('derive: cannot derive context from an empty bar series')
   const idx: number[] = new Array(bars.length)
   idx[0] = 1
   for (let i = 1; i < bars.length; i++) {
