@@ -112,4 +112,14 @@ describe('report rendering', () => {
     expect(json.evaluated).toBe(3)
     expect(json.nearMisses).toHaveLength(1)
   })
+
+  it('renders null flat-base metrics as "-" instead of 0.0%', () => {
+    const nullFlat = diag({ metrics: { ...diag({}).metrics, flatNetChange: null, flatMaSpread: null } })
+    const md = renderMarkdown({
+      ...ctx,
+      tiered: { hits: [], nearMisses: [{ stock: stock('600002', '样例股份'), diagnosis: nullFlat }], others: 0 },
+    })
+    expect(md).toContain('平台净变动-')
+    expect(md).not.toContain('平台净变动0.0%')
+  })
 })

@@ -50,6 +50,10 @@ export const lowFlatLimitUpStrategy: Strategy = composeStrategy({
     },
   },
   canEvaluate(input: StrategyScreenInput, params: StrategyParams): boolean {
-    return input.bars.length >= Math.max(60, params.minBars as number)
+    // A short series must stay *unevaluated* (null) rather than degrade to a
+    // failed-gate diagnosis: the flat-base window (`bars.length > flatWindowBars`)
+    // and the MA60 average (`bars.length >= 60`) both need enough bars.
+    const flatWindow = params.flatWindowBars as number
+    return input.bars.length >= Math.max(60, params.minBars as number, flatWindow + 1)
   },
 })

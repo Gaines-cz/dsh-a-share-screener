@@ -1,7 +1,11 @@
 /**
- * Shared search for the "volume-heavy limit-up" reference day used by both
- * `volume_limit_up` and `cooldown_pullback`. Both filters resolve the same day
- * deterministically, so the coalesced evidence stays consistent.
+ * Shared candidate search for the "volume-heavy limit-up" day(s).
+ *
+ * `volume_limit_up` resolves the most recent day whose volume surge clears the
+ * threshold (a pure "does a limit-up exist" fact); `cooldown_pullback` walks the
+ * same candidates newest-to-oldest to find a day that is *also* followed by a
+ * pullback and volume cooldown. The two filters therefore report evidence about
+ * potentially different days — by design, since they assert different facts.
  * @module a-share-screener/filters/limitup-search
  */
 import type { ParamDocs, StrategyParams } from '../strategies/registry.js'
@@ -43,19 +47,32 @@ export interface LimitUpReference {
   surge: number
 }
 
-/** Most recent limit-up day (scanning back from the latest) with `surge >= minVolumeSurge` inside the window. */
-export function findVolumeHeavyLimitUp(ctx: DerivedCtx, params: StrategyParams): LimitUpReference | null {
+/**
+ * Iterate candidate volume-heavy limit-up days newest-to-oldest, applying the
+ * shared window / minimum-gap / surge bounds. `minAfter` defaults to
+ * `minBarsAfterLimitUp`; callers whose cooldown window must never overlap the
+ * limit-up day pass `max(minBarsAfterLimitUp, cooldownBars + 1)`.
+ */
+export function* iterVolumeHeavyLimitUp(
+  ctx: DerivedCtx,
+  params: StrategyParams,
+  minAfter?: number,
+): Generator<LimitUpReference> {
   const windowBars = params.limitUpWindowBars as number
   const minSurge = params.minVolumeSurge as number
-  const minAfter = params.minBarsAfterLimitUp as number
+  const after = minAfter ?? (params.minBarsAfterLimitUp as number)
   const firstCandidate = Math.max(5, ctx.last - windowBars)
-  const latestAllowed = ctx.last - minAfter
+  const latestAllowed = ctx.last - after
   for (let i = ctx.limitUpDays.length - 1; i >= 0; i--) {
     const day = ctx.limitUpDays[i]!
     if (day.index < firstCandidate) break
     if (day.index > latestAllowed) continue
     if (day.surge < minSurge) continue
-    return { index: day.index, date: day.date, pct: day.ret, surge: day.surge }
+    yield { index: day.index, date: day.date, pct: day.ret, surge: day.surge }
   }
-  return null
+}
+
+/** Most recent volume-heavy limit-up day inside the window, or null. */
+export function findVolumeHeavyLimitUp(ctx: DerivedCtx, params: StrategyParams): LimitUpReference | null {
+  return iterVolumeHeavyLimitUp(ctx, params).next().value ?? null
 }

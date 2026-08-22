@@ -59,12 +59,15 @@ function fmt(v: number | string | boolean | null | undefined, digits = 2): strin
 function gateLine(entry: TieredEntry): string {
   const m = entry.diagnosis.metrics
   const gates = entry.diagnosis.gates
-  const pct = (v: number | string | boolean | null | undefined): string => `${(Number(v ?? 0) * 100).toFixed(1)}%`
+  const pct = (v: number | string | boolean | null | undefined): string =>
+    v === null || v === undefined ? '-' : `${(Number(v) * 100).toFixed(1)}%`
+  const drawdown = (v: number | string | boolean | null | undefined): string =>
+    v === null || v === undefined ? '-' : `-${(Number(v) * 100).toFixed(1)}%`
   const parts: string[] = []
   const push = (label: string, value: string, pass: boolean | undefined): void => {
     parts.push(`${label}${value}${pass === true ? '✓' : '✗'}`)
   }
-  push('距高点', `-${pct(m.drawdownFromHigh)}`, gates.deep_drawdown)
+  push('距高点', drawdown(m.drawdownFromHigh), gates.deep_drawdown)
   push('分位', pct(m.percentileInWindow), gates.low_percentile)
   push('平台净变动', pct(m.flatNetChange), gates.flat_base)
   push(

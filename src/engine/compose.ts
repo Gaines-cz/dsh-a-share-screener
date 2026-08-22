@@ -50,8 +50,13 @@ function leafFilterIds(predicate: Predicate, out: Set<string>): void {
   }
 }
 
+/** Order-independent serialization of a param doc (key insertion order may differ). */
+function stableParamDoc(doc: ParamDoc): string {
+  return JSON.stringify(doc, Object.keys(doc).sort())
+}
+
 function sameDoc(a: ParamDoc, b: ParamDoc): boolean {
-  return JSON.stringify(a) === JSON.stringify(b)
+  return stableParamDoc(a) === stableParamDoc(b)
 }
 
 /**
@@ -96,7 +101,10 @@ export function composeStrategy(opts: ComposeOptions): Strategy {
       const result = evaluate(opts.predicate, ctx, opts.filters, params, true)
       if (!result.passed) return null
       const evidence = { ...result.evidence, close: ctx.bars[ctx.last]!.close, barsAnalyzed: ctx.bars.length }
-      // A strict match implies every gate passed, so no evidence value is null.
+      // For an all-AND strategy a strict match means every leaf filter passed
+      // with non-null evidence, so this cast is safe. OR/NOT trees can pass while
+      // some leaves still hold null evidence (short-circuited siblings, or a NOT
+      // over a failing child); such strategies must sanitize evidence before cast.
       return {
         code: input.stock.code,
         fullCode: input.stock.fullCode,

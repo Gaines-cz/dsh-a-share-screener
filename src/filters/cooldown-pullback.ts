@@ -7,7 +7,7 @@
 import { meanVolume, round } from '../engine/math.js'
 import type { DerivedCtx, Filter, FilterResult } from '../engine/types.js'
 import type { StrategyParams } from '../strategies/registry.js'
-import { findVolumeHeavyLimitUp, limitUpSearchParamDocs } from './limitup-search.js'
+import { iterVolumeHeavyLimitUp, limitUpSearchParamDocs } from './limitup-search.js'
 
 export const cooldownPullbackFilter: Filter = {
   id: 'cooldown_pullback',
@@ -32,25 +32,29 @@ export const cooldownPullbackFilter: Filter = {
     },
   },
   apply(ctx: DerivedCtx, params: StrategyParams): FilterResult {
-    const found = findVolumeHeavyLimitUp(ctx, params)
-    if (found === null) {
-      return { passed: false, evidence: { cooldownVolumeRatio: null, daysSinceLimitUp: null } }
-    }
-    let pulledBack = false
-    for (let e = found.index + 1; e <= ctx.last; e++) {
-      if (ctx.idx[e]! < ctx.idx[found.index]!) {
-        pulledBack = true
-        break
+    const cooldownBars = params.cooldownBars as number
+    // The cooldown window must never overlap the limit-up day's own volume, so
+    // the minimum gap is at least cooldownBars + 1, not merely minBarsAfterLimitUp.
+    const minAfter = Math.max(params.minBarsAfterLimitUp as number, cooldownBars + 1)
+    const maxRatio = params.maxCooldownVolumeRatio as number
+    const cooldownAvg = meanVolume(ctx.bars, ctx.last - cooldownBars + 1, ctx.last + 1)
+    for (const day of iterVolumeHeavyLimitUp(ctx, params, minAfter)) {
+      let pulledBack = false
+      for (let e = day.index + 1; e <= ctx.last; e++) {
+        if (ctx.idx[e]! < ctx.idx[day.index]!) {
+          pulledBack = true
+          break
+        }
+      }
+      if (!pulledBack) continue
+      const limitUpVolume = ctx.bars[day.index]!.volume
+      if (cooldownAvg > maxRatio * limitUpVolume) continue
+      const cooldownRatio = cooldownAvg / limitUpVolume
+      return {
+        passed: true,
+        evidence: { cooldownVolumeRatio: round(cooldownRatio, 4), daysSinceLimitUp: ctx.last - day.index },
       }
     }
-    const cooldownBars = params.cooldownBars as number
-    const cooldownAvg = meanVolume(ctx.bars, ctx.last - cooldownBars + 1, ctx.last + 1)
-    const limitUpVolume = ctx.bars[found.index]!.volume
-    const cooldownRatio = cooldownAvg / limitUpVolume
-    const passed = pulledBack && cooldownAvg <= (params.maxCooldownVolumeRatio as number) * limitUpVolume
-    return {
-      passed,
-      evidence: { cooldownVolumeRatio: round(cooldownRatio, 4), daysSinceLimitUp: ctx.last - found.index },
-    }
+    return { passed: false, evidence: { cooldownVolumeRatio: null, daysSinceLimitUp: null } }
   },
 }
