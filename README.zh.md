@@ -1,6 +1,6 @@
 # dsh-a-share-screener
 
-面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）的 A 股选股插件：可扩展的选股策略注册表 + 独立 CLI，免费、无需 token 的多数据源（新浪主 / 东方财富回退 / 腾讯备胎），并抽象出可扩展的数据源接入层。
+面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）的 A 股选股插件：策略由可复用的原子过滤器组合而成，免费、无需 token 的多数据源（新浪主 / 东方财富回退 / 腾讯备胎），并抽象出可扩展的数据源接入层，附带独立 CLI。
 
 **这是对历史量价形态的技术筛选工具，不构成任何投资建议。**
 
@@ -12,14 +12,7 @@
 dsh plugin --profile myprofile add github:Gaines-cz/dsh-a-share-screener
 ```
 
-git 安装拉取的是源码，pnpm 会执行包的 `prepare` 构建脚本。pnpm ≥ 10 在你授权前会拦截——把 pnpm 打印的确切包键复制进 profile 的 `pnpm-workspace.yaml`：
-
-```yaml
-allowBuilds:
-  dsh-a-share-screener: true
-```
-
-然后重新执行 `add`。授权意味着你允许该包的构建脚本在安装时于本机执行；如需不可变安装可锁定 commit（`github:Gaines-cz/dsh-a-share-screener#<sha>`）。
+git 安装拉取的是源码，但预构建的 `lib/` 产物已提交进仓库，安装时不会执行任何构建脚本。如需不可变安装可锁定 commit（`github:Gaines-cz/dsh-a-share-screener#<sha>`）。
 
 启动：
 
@@ -50,13 +43,31 @@ dsh --profile myprofile
 
 所有阈值都是可按次覆盖的参数（默认值见 `a_share_list_strategies`）。涨停判定按板块：主板 10%、创业板/科创板 20%、北交所 30%。全部价格水平计算基于链式日收益率指数，除权除息不会伪造暴跌或底部。股票池过滤（均可配置）：ST/退市警示、北交所、上市不满 365 天。
 
+该策略本身就是下方五个原子过滤器的组合（全部 AND）。
+
+## 原子过滤器与组合
+
+每个策略都是对可复用原子过滤器的声明式谓词，通过 AND / OR / NOT 组合成表达式树。当前内置五个过滤器（`a_share_list_filters` 可列出各自的参数）：
+
+| 过滤器 | 闸门 |
+|---|---|
+| `deep_drawdown` | 最新价较窗口高点回撤 ≥ X% |
+| `low_percentile` | 最新价处于窗口 ≤ X 分位 |
+| `flat_base` | 近期窗口横盘走平且均线粘合 |
+| `volume_limit_up` | 窗口内存在放量涨停日 |
+| `cooldown_pullback` | 涨停后回落跌破收盘价且量能冷却 |
+
+组合求值时每只股票只做一次共享推导（链式收益率指数 + 预计算的涨停日），然后对表达式树求值：短路路径产出严格命中，全量路径产出逐闸门指标供分层报告——"近邻候选"（只差一道闸）即由此而来。
+
 ## 数据源
 
-插件内置唯一一个免费、无需 token 的数据源：[东方财富](https://www.eastmoney.com/) 公开接口。
+内置三个免费、无需 token 的数据源，默认 `sina`（前复权收盘价与市价一致）：
 
-| 数据源 | token | 冷启动 | 增量 |
-|---|---|---|---|
-| 东方财富（内置） | 无 | 按股拉后复权K线；列表域名实时→延迟自动故障转移 | 按股追加 + 重叠一致性校验 |
+| 数据源 | token | 说明 |
+|---|---|---|
+| 新浪（默认） | 无 | 前复权日线，单请求 1023 根；推荐主源 |
+| 东方财富 | 无 | 按股后复权K线；列表域名实时→延迟自动故障转移 |
+| 腾讯 | 无 | 后复权备胎（报告价格会虚高）；仅作后备 |
 
 每个适配器都位于 `DataSource` 接口之后（`src/datasources/types.ts`）；screener、工具、插件入口只依赖该接口，绝不 import 具体厂商。缓存在 `$DSH_HOME/a-share-screener/<source-id>/`（可用 `cacheDir` 覆盖）。
 
@@ -86,6 +97,7 @@ export function createMyVendorDataSource(limiter: RateLimiter): DataSource {
     - id: a-share-screener
       config:
         # cacheDir: /path/to/cache   # 可选，默认 $DSH_HOME/a-share-screener
+        dataSource: sina             # sina（默认）| eastmoney | tencent
         requestsPerMinute: 200
         historyBars: 800
         scanTimeoutMs: 1800000
@@ -96,24 +108,31 @@ export function createMyVendorDataSource(limiter: RateLimiter): DataSource {
 
 ## 新增策略
 
-策略是插件加载时注册的纯谓词函数：
+推荐方式是把现有原子过滤器组合成谓词树——无需编写任何筛选代码，逐闸门诊断自动获得：
 
 ```ts
 // src/strategies/my-strategy.ts
-import type { Strategy } from './registry.js'
+import { composeStrategy } from '../engine/compose.js'
+import { createFilterRegistry } from '../filters/index.js'
 
-export const myStrategy: Strategy = {
+export const myStrategy = composeStrategy({
   id: 'my_strategy',
   description: '策略寻找什么（模型可见）。',
-  paramDocs: { /* 参数名 → { type, default, description, min?, max? } */ },
-  screen({ stock, bars }, params) {
-    // bars: 升序 { date, close, volume, ret }——ret 为真实日收益率
-    return null // 或 { code, fullCode, name, board, strategy, evidence }
+  // 深度回撤 AND 平台走平（这次不要求涨停形态）
+  predicate: {
+    kind: 'and',
+    children: [
+      { kind: 'filter', filter: 'deep_drawdown' },
+      { kind: 'filter', filter: 'flat_base' },
+    ],
   },
-}
+  filters: createFilterRegistry(),
+})
 ```
 
-在 `src/index.ts` 里与内置策略并列注册即可——无需改动其他代码。工具 schema 和 `a_share_list_strategies` 自动纳入。
+若原子过滤器覆盖不了所需形态，可手工实现 `Strategy` 接口（`screen` 返回命中或 null；可选的 `diagnose` 驱动分层报告）。新的原子过滤器通过 `src/filters/index.ts` 以与内置过滤器相同的 `Filter` 接口接入。
+
+两种方式都在 `src/index.ts` 里与内置策略并列注册即可——无需改动其他代码。工具 schema 和 `a_share_list_strategies` 自动纳入。
 
 ## 独立 CLI (无需 dsh)
 
@@ -147,7 +166,7 @@ pnpm sources     # 列出数据源 id
 
 ## 已知限制
 
-- 东方财富接口公开但非官方文档化；字段漂移会响亮失败而非静默出错，列表域名实时→延迟自动故障转移，单一域名被封不会中断扫描。
+- 免费接口（新浪 / 东方财富 / 腾讯）公开但非官方文档化；字段漂移会响亮失败而非静默出错，东财列表域名实时→延迟自动故障转移，单一域名被封不会中断扫描。
 - 免费源均不提供申万行业分类（`capabilities.industry` 为 false）；板块选股通过东财行业/概念板块成分接口（`--board`）实现，无需行业字段。
 - ST 过滤基于当前股票名称（不追踪历史更名）。
 - 全部计算在本地进程内完成；除数据源的 API 调用外不外发任何数据。

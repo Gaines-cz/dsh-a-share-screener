@@ -1,6 +1,6 @@
 # dsh-a-share-screener
 
-An [A-share](https://en.wikipedia.org/wiki/Stock_screener) stock-screening plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`): pluggable screening strategies on a free, token-less Eastmoney data source, behind an extensible data-source abstraction.
+An [A-share](https://en.wikipedia.org/wiki/Stock_screener) stock-screening plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`): strategies composed from reusable atomic filters on free, token-less data sources, behind an extensible data-source abstraction.
 
 **This is a technical screening tool for historical price/volume patterns. It is NOT investment advice.**
 
@@ -12,14 +12,7 @@ Requires the `dsh` CLI ([DeepSeek Harness](https://github.com/deepseek-ai/deepse
 dsh plugin --profile myprofile add github:Gaines-cz/dsh-a-share-screener
 ```
 
-Git installs pull source, so pnpm runs the package's `prepare` build script. pnpm ≥ 10 blocks that until you authorize it once — copy the exact package key pnpm prints into the profile's `pnpm-workspace.yaml`:
-
-```yaml
-allowBuilds:
-  dsh-a-share-screener: true
-```
-
-then re-run the `add` command. Authorizing this means you allow the package's build script to run on your machine at install time — pin a commit (`github:Gaines-cz/dsh-a-share-screener#<sha>`) if you want immutability.
+Git installs pull source, but the prebuilt `lib/` output is committed to the repo, so no build script runs at install time. Pin a commit (`github:Gaines-cz/dsh-a-share-screener#<sha>`) if you want immutability.
 
 Start with the profile:
 
@@ -50,13 +43,31 @@ The first full scan downloads history into a local disk cache and can take many 
 
 All thresholds are per-call parameters with defaults (see `a_share_list_strategies`). Board-aware limit-up thresholds: 10% main board, 20% ChiNext/STAR, 30% BSE. All price-level math runs on a chained daily-return index, so splits and dividends cannot fake a crash or a bottom. Universe filters (all configurable): ST/delisting names, BSE, listings younger than 365 days.
 
+The strategy is itself a composition of the five atomic filters below (all ANDed).
+
+## Atomic filters & composition
+
+Every strategy is a declarative predicate over reusable atomic filters, combined with AND / OR / NOT into an expression tree. Five filters ship today (`a_share_list_filters` lists them with their parameters):
+
+| Filter | Gate |
+|---|---|
+| `deep_drawdown` | latest price ≥ X% below the window high |
+| `low_percentile` | latest price ranks ≤ Xth percentile of the window |
+| `flat_base` | recent window is flat with converged MAs |
+| `volume_limit_up` | a volume-heavy limit-up day exists in the window |
+| `cooldown_pullback` | price pulled back below that close and volume cooled off |
+
+Composition runs one shared derivation pass per stock (chained return index + pre-computed limit-up days), then evaluates the tree: a short-circuit pass for strict hits and a full pass that produces per-gate metrics for the tiered report — which is how "near-miss" candidates (one gate short) are surfaced.
+
 ## Data source
 
-The plugin ships one free, token-less data source: [Eastmoney](https://www.eastmoney.com/) public endpoints.
+Three free, token-less sources ship today; `sina` is the default (its 前复权 closes match market prices).
 
-| Source | Token | Cold scan | Incremental |
-|---|---|---|---|
-| Eastmoney (built-in) | none | per-stock back-adjusted klines; clist host fails over realtime → delayed | per-stock append with overlap-consistency check |
+| Source | Token | Notes |
+|---|---|---|
+| Sina (default) | none | 前复权 daily bars, 1023 bars per request; the recommended primary |
+| Eastmoney | none | back-adjusted klines per stock; clist host fails over realtime → delayed |
+| Tencent | none | 后复权 fallback (report prices run high); backup only |
 
 Every adapter sits behind a `DataSource` interface (`src/datasources/types.ts`); the screener, tools, and plugin entry import only that interface, never a concrete vendor. Cache lives under `$DSH_HOME/a-share-screener/<source-id>/` (override with `cacheDir`).
 
@@ -86,6 +97,7 @@ Set in your profile's `cordis.patch.yml` (all fields have defaults):
     - id: a-share-screener
       config:
         # cacheDir: /path/to/cache   # optional, defaults to $DSH_HOME/a-share-screener
+        dataSource: sina             # sina (default) | eastmoney | tencent
         requestsPerMinute: 200
         historyBars: 800
         scanTimeoutMs: 1800000
@@ -96,24 +108,31 @@ Set in your profile's `cordis.patch.yml` (all fields have defaults):
 
 ## Add a strategy
 
-Strategies are pure predicates registered at plugin load:
+The preferred way is composing existing atomic filters into a predicate tree — no screening code to write, per-gate diagnosis comes for free:
 
 ```ts
 // src/strategies/my-strategy.ts
-import type { Strategy } from './registry.js'
+import { composeStrategy } from '../engine/compose.js'
+import { createFilterRegistry } from '../filters/index.js'
 
-export const myStrategy: Strategy = {
+export const myStrategy = composeStrategy({
   id: 'my_strategy',
   description: 'What it looks for, model-facing.',
-  paramDocs: { /* name → { type, default, description, min?, max? } */ },
-  screen({ stock, bars }, params) {
-    // bars: ascending { date, close, volume, ret } — ret is the true daily return
-    return null // or { code, fullCode, name, board, strategy, evidence }
+  // deep drawdown AND flat base (no limit-up requirement this time)
+  predicate: {
+    kind: 'and',
+    children: [
+      { kind: 'filter', filter: 'deep_drawdown' },
+      { kind: 'filter', filter: 'flat_base' },
+    ],
   },
-}
+  filters: createFilterRegistry(),
+})
 ```
 
-Register it in `src/index.ts` next to the built-in one — no other changes. The tool schemas and `a_share_list_strategies` pick it up automatically.
+For shapes the atomic filters do not cover, implement the `Strategy` interface by hand (`screen` returns a hit or null; an optional `diagnose` powers the tiered report). New atomic filters plug in through `src/filters/index.ts` with the same `Filter` interface the built-ins use.
+
+Either way, register it in `src/index.ts` next to the built-in one — no other changes. The tool schemas and `a_share_list_strategies` pick it up automatically.
 
 ## Standalone CLI (no dsh required)
 
@@ -134,7 +153,7 @@ Common options: `--source sina|eastmoney|tencent`, `--board <name>` (e.g. `--boa
 
 ## Limitations
 
-- Eastmoney endpoints are public but undocumented; field drift fails loudly rather than silently, and the clist host fails over realtime → delayed so one blocked host does not kill a scan.
+- The free endpoints (Sina / Eastmoney / Tencent) are public but undocumented; field drift fails loudly rather than silently, and Eastmoney's clist host fails over realtime → delayed so one blocked host does not kill a scan.
 - Free sources do not classify industries (`capabilities.industry` is false); sector screening works through the Eastmoney industry/concept board-member endpoint (`--board`).
 - ST filtering uses the current stock name (no historical name-change tracking).
 - Everything runs in the local process; no data leaves your machine except API calls to the data source.
