@@ -161,4 +161,56 @@ describe('report rendering', () => {
     expect(md).not.toContain('回落缩量')
     expect(md).not.toContain('✗')
   })
+
+  it('renders the Phase-1 gate cells (breakout / MA / volatility / bars-since-low)', () => {
+    // A low_flat_breakout near-miss: breakout passed, drawdown + MA failed.
+    const breakoutDiag = diag({
+      gates: { deep_drawdown: false, platform_breakout: true, ma_stabilization: false },
+      failedGates: ['deep_drawdown', 'ma_stabilization'],
+      metrics: {
+        close: 12.5,
+        drawdownFromHigh: 0.4,
+        breakoutDate: '20260818',
+        breakoutSurge: 3.2,
+        barsSinceBreakout: 4,
+        baseToClosePct: 0.05,
+        maSlope: 0.012,
+        closeVsMaPct: -0.008,
+        barsAnalyzed: 800,
+      },
+    })
+    const md = renderMarkdown({
+      ...ctx,
+      strategy: 'low_flat_breakout',
+      tiered: { hits: [], nearMisses: [{ stock: stock('600005', '突破股份'), diagnosis: breakoutDiag }], others: 0 },
+    })
+    expect(md).toContain('距高点-40.0%✗')
+    expect(md).toContain('突破20260818(3.2x/4日)✓')
+    expect(md).toContain('MA斜率1.2%·离MA-0.8%✗')
+    expect(md).toContain('差在: 距高点回撤、均线企稳')
+    // A volatility_regime cell renders its annualized percentage.
+    const volDiag = diag({
+      gates: { volatility_regime: true },
+      failedGates: [],
+      metrics: { close: 5, annualVol: 0.3412 },
+    })
+    const volMd = renderMarkdown({
+      ...ctx,
+      strategy: 'x',
+      tiered: { hits: [{ stock: stock('600006', '波动股份'), diagnosis: volDiag }], nearMisses: [], others: 0 },
+    })
+    expect(volMd).toContain('年化波动34.1%✓')
+    // A bars_since_low cell renders days + height-above-low.
+    const lowDiag = diag({
+      gates: { bars_since_low: true },
+      failedGates: [],
+      metrics: { close: 5, barsSinceLow: 109, pctAboveLow: 0.08 },
+    })
+    const lowMd = renderMarkdown({
+      ...ctx,
+      strategy: 'x',
+      tiered: { hits: [{ stock: stock('600007', '磨底股份'), diagnosis: lowDiag }], nearMisses: [], others: 0 },
+    })
+    expect(lowMd).toContain('距低点109日/8.0%✓')
+  })
 })

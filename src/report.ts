@@ -41,7 +41,11 @@ export function tierResults(entries: TieredEntry[]): TieredResult {
 const GATE_LABELS: Record<string, string> = {
   deep_drawdown: '距高点回撤',
   low_percentile: '历史分位',
+  bars_since_low: '距低点时长',
   flat_base: '平台走平+均线收敛',
+  platform_breakout: '平台放量突破',
+  ma_stabilization: '均线企稳',
+  volatility_regime: '波动率区间',
   volume_limit_up: '放量涨停',
   cooldown_pullback: '涨停后回落缩量',
 }
@@ -80,7 +84,23 @@ interface GateCell {
 const GATE_CELLS: Record<string, GateCell> = {
   deep_drawdown: { label: '距高点', value: (m) => drawdownPct(m.drawdownFromHigh) },
   low_percentile: { label: '分位', value: (m) => pct(m.percentileInWindow) },
+  bars_since_low: {
+    label: '距低点',
+    value: (m) => (m.barsSinceLow == null ? '-' : `${fmt(m.barsSinceLow, 0)}日/${pct(m.pctAboveLow)}`),
+  },
   flat_base: { label: '平台净变动', value: (m) => pct(m.flatNetChange) },
+  platform_breakout: {
+    label: '突破',
+    value: (m) =>
+      m.breakoutDate === null || m.breakoutDate === undefined
+        ? '-'
+        : `${m.breakoutDate}(${fmt(m.breakoutSurge, 1)}x/${fmt(m.barsSinceBreakout, 0)}日)`,
+  },
+  ma_stabilization: {
+    label: 'MA斜率',
+    value: (m) => (m.maSlope == null ? '-' : `${pct(m.maSlope)}·离MA${pct(m.closeVsMaPct)}`),
+  },
+  volatility_regime: { label: '年化波动', value: (m) => pct(m.annualVol) },
   volume_limit_up: {
     label: '放量涨停',
     value: (m) =>
