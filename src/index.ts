@@ -37,6 +37,8 @@ export interface Config {
   excludeBSE: boolean
   /** Exclude stocks listed fewer than this many days. */
   minListDays: number
+  /** Exclude stocks listed longer than this many days (0 = no upper bound). */
+  maxListDays: number
   /** Cooperative timeout budget for one full scan, milliseconds. */
   scanTimeoutMs: number
 }
@@ -49,6 +51,7 @@ export const Config: Schema<Config> = Schema.object({
   excludeST: Schema.boolean().default(true),
   excludeBSE: Schema.boolean().default(true),
   minListDays: Schema.number().min(0).max(5000).default(365),
+  maxListDays: Schema.number().min(0).max(10000).default(0),
   scanTimeoutMs: Schema.number().min(60_000).max(7_200_000).default(1_800_000),
 })
 

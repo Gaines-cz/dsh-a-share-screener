@@ -140,4 +140,25 @@ describe('report rendering', () => {
     })
     expect(md).toContain('回落缩量20.0%@20260301')
   })
+
+  it('renders only the gates a strategy actually has (no phantom ✗ for absent filters)', () => {
+    // A flat_base_low hit: only low_percentile + flat_base gates exist.
+    const flatLowHit = diag({
+      matched: true,
+      gates: { low_percentile: true, flat_base: true },
+      failedGates: [],
+    })
+    const md = renderMarkdown({
+      ...ctx,
+      strategy: 'flat_base_low',
+      tiered: { hits: [{ stock: stock('600004', '平底股份'), diagnosis: flatLowHit }], nearMisses: [], others: 0 },
+    })
+    expect(md).toContain('分位5.0%✓')
+    expect(md).toContain('平台净变动3.0%✓')
+    // Gates the strategy does not use must not appear as failed.
+    expect(md).not.toContain('距高点')
+    expect(md).not.toContain('放量涨停')
+    expect(md).not.toContain('回落缩量')
+    expect(md).not.toContain('✗')
+  })
 })

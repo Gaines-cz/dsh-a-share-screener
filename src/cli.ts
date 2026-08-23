@@ -50,6 +50,18 @@ function host() {
   }
 }
 
+/** Parse a non-negative numeric CLI option; fail loudly on garbage input. */
+function numOption(values: Record<string, unknown>, key: string, fallback: number): number {
+  const raw = values[key]
+  if (raw === undefined) return fallback
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 0) {
+    console.error(`参数错误: --${key} 应为非负数字, 遇到: ${String(raw)}`)
+    process.exit(2)
+  }
+  return n
+}
+
 function configFrom(values: Record<string, unknown>): ScreenerConfig {
   return {
     cacheDir: (values['cache-dir'] as string | undefined) ?? null,
@@ -57,7 +69,8 @@ function configFrom(values: Record<string, unknown>): ScreenerConfig {
     historyBars: Number(values['history-bars'] ?? DEFAULT_HISTORY_BARS),
     excludeST: true,
     excludeBSE: true,
-    minListDays: 365,
+    minListDays: numOption(values, 'min-list-days', 365),
+    maxListDays: numOption(values, 'max-list-days', 0),
     scanTimeoutMs: 7_200_000,
   }
 }
@@ -127,6 +140,8 @@ function commonOptions(): NonNullable<ParseArgsConfig['options']> {
     refresh: { type: 'boolean' },
     concurrency: { type: 'string', default: '12' },
     'history-bars': { type: 'string' },
+    'min-list-days': { type: 'string' },
+    'max-list-days': { type: 'string' },
     codes: { type: 'string' },
     board: { type: 'string', short: 'b' },
   }
@@ -154,7 +169,9 @@ function printHelp(): void {
   --cache-dir <dir>                  缓存目录 (默认 ~/.dsh/a-share-screener)
   --refresh                          强制刷新股票清单与K线
   --concurrency <n>                  并发请求数 (默认 12)
-  --history-bars <n>                 K线回看窗口 (默认 800)`)
+  --history-bars <n>                 K线回看窗口 (默认 800)
+  --min-list-days <n>                剔除上市不足 n 天 (默认 365)
+  --max-list-days <n>                剔除上市超过 n 天 (默认 0 = 不限; 如 1460 ≈ 4年)`)
 }
 
 async function cmdSync(values: Record<string, unknown>): Promise<void> {

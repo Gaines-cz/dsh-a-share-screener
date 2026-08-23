@@ -126,6 +126,26 @@ describe('runScreen (data-source path)', () => {
     expect(dailyBars).not.toHaveBeenCalled()
   })
 
+  it('excludes stocks listed longer than maxListDays', async () => {
+    const dir = await tempDir()
+    const twoYearsAgo = new Date()
+    twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2)
+    listStocks.mockResolvedValue([
+      stock('600001', '老公司', 'main', '20100101'), // ~16 years: too old
+      stock('600002', '适龄公司', 'main', ymd(twoYearsAgo)), // 2 years: in range
+      stock('600003', '太新公司', 'main', ymd(new Date())), // too new
+    ])
+    dailyBars.mockResolvedValue(fixtureBars())
+
+    const signal = new AbortController().signal
+    const result = await scan(dir, config(dir, { maxListDays: 1460 }), { strategyId: 'low_flat_limit_up', signal })
+
+    expect(result.scanned).toBe(1)
+    expect(result.matched).toBe(1)
+    expect(result.candidates[0]!.code).toBe('600002')
+    expect(result.skipped).toEqual({ 'too-old-listing': 1, 'recent-or-unknown-listing': 1 })
+  })
+
   it('refetches the full window when a cached tail is stale', async () => {
     const dir = await tempDir()
     listStocks.mockResolvedValue([stock('600001', '好公司', 'main', '20100101')])
