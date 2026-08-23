@@ -55,31 +55,63 @@ function fmt(v: number | string | boolean | null | undefined, digits = 2): strin
   return String(v ?? '-')
 }
 
+function pct(v: number | string | boolean | null | undefined): string {
+  return v === null || v === undefined ? '-' : `${(Number(v) * 100).toFixed(1)}%`
+}
+
+function drawdownPct(v: number | string | boolean | null | undefined): string {
+  return v === null || v === undefined ? '-' : `-${(Number(v) * 100).toFixed(1)}%`
+}
+
+type DiagnosisMetrics = StrategyDiagnosis['metrics']
+
+interface GateCell {
+  /** Short label used inside the compact gate line. */
+  label: string
+  /** Renders the metric behind the gate ('-' when the filter reported null). */
+  value: (m: DiagnosisMetrics) => string
+}
+
+/**
+ * Compact gate cells (short label + value formatter) in canonical render
+ * order. `gateLine` renders only the gates a strategy's diagnosis actually
+ * contains, so composed strategies with fewer filters show no phantom ✗.
+ */
+const GATE_CELLS: Record<string, GateCell> = {
+  deep_drawdown: { label: '距高点', value: (m) => drawdownPct(m.drawdownFromHigh) },
+  low_percentile: { label: '分位', value: (m) => pct(m.percentileInWindow) },
+  flat_base: { label: '平台净变动', value: (m) => pct(m.flatNetChange) },
+  volume_limit_up: {
+    label: '放量涨停',
+    value: (m) =>
+      m.limitUpDate === null || m.limitUpDate === undefined ? '-' : `${m.limitUpDate}(${fmt(m.limitUpVolumeSurge, 1)}x)`,
+  },
+  cooldown_pullback: {
+    label: '回落缩量',
+    value: (m) => {
+      // The cooldown metrics cite their own reference day (cooldownRefDate),
+      // which may be an older limit-up day than limitUpDate — flag divergence.
+      const ref = m.cooldownRefDate === null || m.cooldownRefDate === undefined ? null : String(m.cooldownRefDate)
+      const suffix = ref !== null && ref !== String(m.limitUpDate ?? '') ? `@${ref}` : ''
+      return `${pct(m.cooldownVolumeRatio)}${suffix}`
+    },
+  },
+}
+
 /** Compact per-stock gate summary, e.g. "距高点-52.3%✓ 分位29.9%✗ …". */
 function gateLine(entry: TieredEntry): string {
   const m = entry.diagnosis.metrics
   const gates = entry.diagnosis.gates
-  const pct = (v: number | string | boolean | null | undefined): string =>
-    v === null || v === undefined ? '-' : `${(Number(v) * 100).toFixed(1)}%`
-  const drawdown = (v: number | string | boolean | null | undefined): string =>
-    v === null || v === undefined ? '-' : `-${(Number(v) * 100).toFixed(1)}%`
   const parts: string[] = []
-  const push = (label: string, value: string, pass: boolean | undefined): void => {
-    parts.push(`${label}${value}${pass === true ? '✓' : '✗'}`)
+  const push = (gate: string): void => {
+    const cell = GATE_CELLS[gate]
+    const label = cell?.label ?? gateLabel(gate)
+    const value = cell === undefined ? '' : cell.value(m)
+    parts.push(`${label}${value}${gates[gate] === true ? '✓' : '✗'}`)
   }
-  push('距高点', drawdown(m.drawdownFromHigh), gates.deep_drawdown)
-  push('分位', pct(m.percentileInWindow), gates.low_percentile)
-  push('平台净变动', pct(m.flatNetChange), gates.flat_base)
-  push(
-    '放量涨停',
-    m.limitUpDate === null || m.limitUpDate === undefined ? '-' : `${m.limitUpDate}(${fmt(m.limitUpVolumeSurge, 1)}x)`,
-    gates.volume_limit_up,
-  )
-  // The cooldown metrics cite their own reference day (cooldownRefDate), which
-  // may be an older limit-up day than limitUpDate — flag it when they diverge.
-  const coolRef = m.cooldownRefDate === null || m.cooldownRefDate === undefined ? null : String(m.cooldownRefDate)
-  const coolRefSuffix = coolRef !== null && coolRef !== String(m.limitUpDate ?? '') ? `@${coolRef}` : ''
-  push('回落缩量', `${pct(m.cooldownVolumeRatio)}${coolRefSuffix}`, gates.cooldown_pullback)
+  const present = Object.keys(gates)
+  for (const gate of Object.keys(GATE_CELLS)) if (present.includes(gate)) push(gate)
+  for (const gate of present) if (!(gate in GATE_CELLS)) push(gate)
   return parts.join(' ')
 }
 

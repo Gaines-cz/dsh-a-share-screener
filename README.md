@@ -37,13 +37,19 @@ Three tools are registered:
 
 The first full scan downloads history into a local disk cache and can take many minutes (bounded by the data source's rate limit); later scans reuse the cache and only fetch new trade dates. Cancellation is cooperative — aborting the tool call stops the scan.
 
-## The `low_flat_limit_up` strategy
+## Built-in strategies
+
+### `flat_base_low`
+
+"Bottom + flat base": the stock trades at or below the 15th percentile of its recent price distribution (~3 years, clamped to available bars) while the last month is a flat, MA-converged base. No limit-up pattern is required. Pair it with `minListDays` / `maxListDays` to constrain listing age — e.g. `minListDays: 365` + `maxListDays: 1460` screens stocks listed 1–4 years.
+
+### `low_flat_limit_up`
 
 "Historical low, flat base, faded volume-heavy limit-up": the stock sits deep below its window high (default ≥ 65% drawdown) at the bottom of its recent distribution (≤ 15th percentile of ~3 years), the last month is a flat, MA-converged base, and within ~6 months there was a limit-up day on ≥ 2× the prior 5-day average volume that has since pulled back below its close while volume cooled to ≤ 40% of the limit-up day.
 
-All thresholds are per-call parameters with defaults (see `a_share_list_strategies`). Board-aware limit-up thresholds: 10% main board, 20% ChiNext/STAR, 30% BSE. All price-level math runs on a chained daily-return index, so splits and dividends cannot fake a crash or a bottom. Universe filters (all configurable): ST/delisting names, BSE, listings younger than 365 days.
+All thresholds are per-call parameters with defaults (see `a_share_list_strategies`). Board-aware limit-up thresholds: 10% main board, 20% ChiNext/STAR, 30% BSE. All price-level math runs on a chained daily-return index, so splits and dividends cannot fake a crash or a bottom. Universe filters (all configurable): ST/delisting names, BSE, listings younger than `minListDays` (default 365) or older than `maxListDays` (default 0 = no upper bound).
 
-The strategy is itself a composition of the five atomic filters below (all ANDed).
+Both strategies are compositions of the atomic filters below.
 
 ## Atomic filters & composition
 
@@ -104,6 +110,7 @@ Set in your profile's `cordis.patch.yml` (all fields have defaults):
         excludeST: true
         excludeBSE: true
         minListDays: 365
+        maxListDays: 0                # 0 = no upper bound; e.g. 1460 ≈ 4 years
 ```
 
 ## Add a strategy
@@ -147,7 +154,7 @@ pnpm filters     # list atomic filter ids and their parameter tables
 pnpm sources     # list data source ids
 ```
 
-Common options: `--source sina|eastmoney|tencent`, `--board <name>` (e.g. `--board 核能核电`), `--codes 600519,000858`, `--strategy <id>`, `--params k=v,k2=v2`, `--cache-dir <dir>`, `--out <dir>`.
+Common options: `--source sina|eastmoney|tencent`, `--board <name>` (e.g. `--board 核能核电`), `--codes 600519,000858`, `--strategy <id>`, `--params k=v,k2=v2`, `--min-list-days <n>`, `--max-list-days <n>` (0 = no upper bound), `--cache-dir <dir>`, `--out <dir>`.
 
 `pnpm scan` writes `reports/<date>-<strategy>-<scope>.md` (+ `.json`). The near-miss tier (exactly one gate failed) exists because a strict multi-gate strategy frequently returns zero hits — it keeps every run reviewable.
 

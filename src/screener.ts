@@ -23,6 +23,8 @@ export interface ScreenerConfig {
   excludeST: boolean
   excludeBSE: boolean
   minListDays: number
+  /** Exclude stocks listed longer than this many days (absent/0/null = no upper bound). */
+  maxListDays?: number | null
   /** Cooperative tool timeout budget for one scan, milliseconds. */
   scanTimeoutMs: number
 }
@@ -174,6 +176,8 @@ async function prepareUniverse(
   }
 
   const minListDate = dateMinusDays(today, config.minListDays)
+  const maxListDays = config.maxListDays ?? 0
+  const maxListDate = maxListDays > 0 ? dateMinusDays(today, maxListDays) : ''
   const universe: StockMeta[] = []
   for (const stock of stocksCache.stocks) {
     if (config.excludeST && isSt(stock.name)) {
@@ -188,6 +192,10 @@ async function prepareUniverse(
     }
     if (stock.listDate === '' || stock.listDate >= minListDate) {
       skip('recent-or-unknown-listing')
+      continue
+    }
+    if (maxListDate !== '' && stock.listDate < maxListDate) {
+      skip('too-old-listing')
       continue
     }
     universe.push(stock)

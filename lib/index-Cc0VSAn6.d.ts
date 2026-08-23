@@ -157,6 +157,8 @@ interface Config {
   excludeBSE: boolean;
   /** Exclude stocks listed fewer than this many days. */
   minListDays: number;
+  /** Exclude stocks listed longer than this many days (0 = no upper bound). */
+  maxListDays: number;
   /** Cooperative timeout budget for one full scan, milliseconds. */
   scanTimeoutMs: number;
 }
