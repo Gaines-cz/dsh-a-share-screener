@@ -1,6 +1,6 @@
 {
   "name": "dsh-a-share-screener",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A-share stock screening plugin for DeepSeek Harness (dsh): pluggable strategies on a free Eastmoney data source, behind an extensible data-source abstraction.",
   "type": "module",
   "license": "MIT",
