@@ -11,12 +11,14 @@ import { cooldownPullbackFilter } from './cooldown-pullback.js'
 import { deepDrawdownFilter } from './deep-drawdown.js'
 import { flatBaseFilter } from './flat-base.js'
 import { industryClearanceFilter } from './industry-clearance.js'
+import { industryPositionFilter } from './industry-position.js'
 import { lowPercentileFilter } from './low-percentile.js'
 import { maStabilizationFilter } from './ma-stabilization.js'
 import { marketCapBandFilter } from './market-cap-band.js'
 import { platformBreakoutFilter } from './platform-breakout.js'
 import { turnoverBandFilter } from './turnover-band.js'
 import { volatilityRegimeFilter } from './volatility-regime.js'
+import { volumeDryUpFilter } from './volume-dry-up.js'
 import { volumeLimitUpFilter } from './volume-limitup.js'
 
 /** Register every shipped atomic filter. Safe to call once per registry instance. */
@@ -30,7 +32,9 @@ export function registerAllFilters(registry: FilterRegistry): void {
   registry.register(volatilityRegimeFilter)
   registry.register(volumeLimitUpFilter)
   registry.register(cooldownPullbackFilter)
+  registry.register(volumeDryUpFilter)
   registry.register(industryClearanceFilter)
+  registry.register(industryPositionFilter)
   registry.register(marketCapBandFilter)
   registry.register(amountLiquidityFilter)
   registry.register(turnoverBandFilter)

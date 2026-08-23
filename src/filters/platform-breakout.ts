@@ -60,11 +60,11 @@ export const platformBreakoutFilter: Filter = {
     },
     minBarsAfterBreakout: {
       type: 'number',
-      default: 1,
+      default: 2,
       min: 1,
       max: 30,
       integer: true,
-      description: 'Breakout day must be at least this many bars before the latest bar.',
+      description: 'Breakout day must be at least this many bars before the latest bar (>= 2 gives the breakout one confirming close).',
     },
     maxBaseGiveback: {
       type: 'number',

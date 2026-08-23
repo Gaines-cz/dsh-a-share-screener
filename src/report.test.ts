@@ -162,6 +162,22 @@ describe('report rendering', () => {
     expect(md).not.toContain('✗')
   })
 
+  it('renders the new gate cells (industry position / volume dry-up)', () => {
+    const posDiag = diag({
+      gates: { industry_position: true, volume_dry_up: false },
+      failedGates: ['volume_dry_up'],
+      metrics: { close: 5, industry: '光伏设备', industryMedPos: 0.2, industryMembers: 59, dryUpVolumeRatio: 0.18 },
+    })
+    const md = renderMarkdown({
+      ...ctx,
+      strategy: 'custom',
+      tiered: { hits: [], nearMisses: [{ stock: stock('600009', '位置股份'), diagnosis: posDiag }], others: 0 },
+    })
+    expect(md).toContain('行业位置光伏设备·中位分位20.0%/59家✓')
+    expect(md).toContain('地量18.0%✗')
+    expect(md).toContain('差在: 地量')
+  })
+
   it('renders the Phase-2 gate cells (industry clearance / market cap / amount liquidity)', () => {
     const diag2 = diag({
       gates: { industry_clearance: true, market_cap_band: true, amount_liquidity: false },

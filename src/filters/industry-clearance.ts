@@ -9,6 +9,7 @@
 import { round } from '../engine/math.js'
 import type { DerivedCtx, Filter, FilterResult } from '../engine/types.js'
 import type { StrategyParams } from '../strategies/registry.js'
+import { industrySharedParamDocs, noIndustryEvidence } from './industry-shared.js'
 
 export const industryClearanceFilter: Filter = {
   id: 'industry_clearance',
@@ -18,6 +19,7 @@ export const industryClearanceFilter: Filter = {
     'members. Requires industry data (all shipped sources provide it via the shared stock list).',
   requires: { industry: true },
   paramDocs: {
+    ...industrySharedParamDocs,
     minIndustryMedDrawdown: {
       type: 'number',
       default: 0.4,
@@ -32,23 +34,13 @@ export const industryClearanceFilter: Filter = {
       max: 1,
       description: 'Share of the industry\'s members at least 60% below their window high.',
     },
-    minIndustryMembers: {
-      type: 'number',
-      default: 8,
-      min: 3,
-      max: 100,
-      integer: true,
-      description: 'Industries with fewer aggregated members do not pass (statistically meaningless).',
-    },
   },
   apply(ctx: DerivedCtx, params: StrategyParams): FilterResult {
     const stats = ctx.industry
     if (stats === undefined) {
-      // No industry classification for this stock, or the screener ran no
-      // aggregation pass (capability-gated strategies never get here).
       return {
         passed: false,
-        evidence: { industry: ctx.stock.industry ?? null, industryMedDrawdown: null, industryDeepShare: null, industryMembers: null },
+        evidence: noIndustryEvidence(ctx, ['industryMedDrawdown', 'industryDeepShare', 'industryMembers']),
       }
     }
     const passed =
