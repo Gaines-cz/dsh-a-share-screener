@@ -162,6 +162,31 @@ describe('report rendering', () => {
     expect(md).not.toContain('✗')
   })
 
+  it('renders the Phase-2 gate cells (industry clearance / market cap / amount liquidity)', () => {
+    const diag2 = diag({
+      gates: { industry_clearance: true, market_cap_band: true, amount_liquidity: false },
+      failedGates: ['amount_liquidity'],
+      metrics: {
+        close: 5,
+        industry: '光伏设备',
+        industryMedDrawdown: 0.5512,
+        industryDeepShare: 0.4,
+        industryMembers: 22,
+        marketCapYi: 85.3,
+        medianAmountYi: 0.084,
+      },
+    })
+    const md = renderMarkdown({
+      ...ctx,
+      strategy: 'custom',
+      tiered: { hits: [], nearMisses: [{ stock: stock('600008', '行业股份'), diagnosis: diag2 }], others: 0 },
+    })
+    expect(md).toContain('行业出清光伏设备·中位回撤55.1%/深跌40.0%/22家✓')
+    expect(md).toContain('市值85亿✓')
+    expect(md).toContain('日成交额中位0.08亿✗')
+    expect(md).toContain('差在: 成交额下限')
+  })
+
   it('renders the Phase-1 gate cells (breakout / MA / volatility / bars-since-low)', () => {
     // A low_flat_breakout near-miss: breakout passed, drawdown + MA failed.
     const breakoutDiag = diag({

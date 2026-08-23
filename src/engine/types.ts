@@ -6,6 +6,7 @@
  * @module a-share-screener/engine/types
  */
 import type { ParamDocs, StrategyParams } from '../strategies/registry.js'
+import type { DataRequirements } from '../datasources/types.js'
 import type { SeriesBar, StockMeta } from '../types.js'
 
 /** Quantified evidence a filter emits (null when a metric could not be computed). */
@@ -24,7 +25,31 @@ export interface Filter {
   readonly description: string
   /** Declarative parameter table (defaults + ranges), merged into strategy paramDocs. */
   readonly paramDocs: ParamDocs
+  /**
+   * Data-source capabilities this filter needs. Strategies composed from the
+   * filter inherit the union; the screener refuses to run (loudly) on sources
+   * lacking a required capability instead of silently degrading.
+   */
+  readonly requires?: DataRequirements
   apply(ctx: DerivedCtx, params: StrategyParams): FilterResult
+}
+
+/**
+ * Parameter-independent industry-cycle statistics for one industry board,
+ * aggregated by the screener's pre-pass over the whole universe (members with
+ * a known industry and fetchable bars). `deep` = drawdown >= 0.6.
+ */
+export interface IndustryStats {
+  /** Industry-board name, e.g. "银行". */
+  readonly industry: string
+  /** Number of universe members aggregated into these statistics. */
+  readonly members: number
+  /** Median drawdown-from-high across members (chained return index). */
+  readonly medDrawdown: number
+  /** Median window-percentile across members (730-bar window, clamped). */
+  readonly medPos: number
+  /** Share of members >= 60% below their window high. */
+  readonly deepShare: number
 }
 
 /** A close-at-limit-up day with its pre-computed volume surge. */
@@ -54,6 +79,12 @@ export interface DerivedCtx {
   last: number
   /** Chained return index at the latest bar. */
   current: number
+  /**
+   * Industry-cycle statistics of this stock's industry, injected by the
+   * screener's aggregation pre-pass. Undefined when the strategy does not
+   * require industry data or the stock has no known industry.
+   */
+  industry?: IndustryStats
 }
 
 /** A declarative composition of atomic filters via AND / OR / NOT. */

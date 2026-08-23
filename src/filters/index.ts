@@ -5,12 +5,15 @@
  * @module a-share-screener/filters
  */
 import { FilterRegistry } from '../engine/types.js'
+import { amountLiquidityFilter } from './amount-liquidity.js'
 import { barsSinceLowFilter } from './bars-since-low.js'
 import { cooldownPullbackFilter } from './cooldown-pullback.js'
 import { deepDrawdownFilter } from './deep-drawdown.js'
 import { flatBaseFilter } from './flat-base.js'
+import { industryClearanceFilter } from './industry-clearance.js'
 import { lowPercentileFilter } from './low-percentile.js'
 import { maStabilizationFilter } from './ma-stabilization.js'
+import { marketCapBandFilter } from './market-cap-band.js'
 import { platformBreakoutFilter } from './platform-breakout.js'
 import { volatilityRegimeFilter } from './volatility-regime.js'
 import { volumeLimitUpFilter } from './volume-limitup.js'
@@ -26,6 +29,9 @@ export function registerAllFilters(registry: FilterRegistry): void {
   registry.register(volatilityRegimeFilter)
   registry.register(volumeLimitUpFilter)
   registry.register(cooldownPullbackFilter)
+  registry.register(industryClearanceFilter)
+  registry.register(marketCapBandFilter)
+  registry.register(amountLiquidityFilter)
 }
 
 /** Build a registry pre-loaded with every shipped filter. */

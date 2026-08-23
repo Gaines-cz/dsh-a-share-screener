@@ -48,6 +48,9 @@ const GATE_LABELS: Record<string, string> = {
   volatility_regime: '波动率区间',
   volume_limit_up: '放量涨停',
   cooldown_pullback: '涨停后回落缩量',
+  industry_clearance: '行业出清',
+  market_cap_band: '市值区间',
+  amount_liquidity: '成交额下限',
 }
 
 export function gateLabel(gate: string): string {
@@ -106,6 +109,15 @@ const GATE_CELLS: Record<string, GateCell> = {
     value: (m) =>
       m.limitUpDate === null || m.limitUpDate === undefined ? '-' : `${m.limitUpDate}(${fmt(m.limitUpVolumeSurge, 1)}x)`,
   },
+  industry_clearance: {
+    label: '行业出清',
+    value: (m) =>
+      m.industryMedDrawdown == null
+        ? '-'
+        : `${String(m.industry ?? '?')}·中位回撤${pct(m.industryMedDrawdown)}/深跌${pct(m.industryDeepShare)}/${fmt(m.industryMembers, 0)}家`,
+  },
+  market_cap_band: { label: '市值', value: (m) => (m.marketCapYi == null ? '-' : `${fmt(m.marketCapYi, 0)}亿`) },
+  amount_liquidity: { label: '日成交额中位', value: (m) => (m.medianAmountYi == null ? '-' : `${fmt(m.medianAmountYi, 2)}亿`) },
   cooldown_pullback: {
     label: '回落缩量',
     value: (m) => {

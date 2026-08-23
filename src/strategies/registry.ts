@@ -6,6 +6,8 @@
  * @module a-share-screener/strategies/registry
  */
 import type { Board, SeriesBar, StockMeta } from '../types.js'
+import type { DataRequirements } from '../datasources/types.js'
+import type { IndustryStats } from '../engine/types.js'
 
 /** Declarative documentation and validation for one strategy parameter. */
 export type ParamDoc = {
@@ -28,6 +30,11 @@ export interface StrategyScreenInput {
   stock: StockMeta
   /** Ascending series; `bars[0].ret` may be null. */
   bars: SeriesBar[]
+  /**
+   * Industry-cycle statistics of this stock's industry, provided by the
+   * screener when the strategy requires industry data; otherwise undefined.
+   */
+  industryStats?: IndustryStats
 }
 
 /** A strategy match with the quantified evidence that triggered it. */
@@ -61,6 +68,12 @@ export interface Strategy {
   readonly description: string
   /** Parameter table; also exposed through the a_share_list_strategies tool. */
   readonly paramDocs: ParamDocs
+  /**
+   * Data-source capabilities the strategy needs (composed strategies derive it
+   * from their leaf filters). The screener refuses to run on sources lacking a
+   * required capability, loudly, instead of silently degrading results.
+   */
+  readonly requires?: DataRequirements
   screen(input: StrategyScreenInput, params: StrategyParams): StrategyHit | null
   /**
    * Optional per-gate diagnosis, used by the CLI to report why a stock did not
