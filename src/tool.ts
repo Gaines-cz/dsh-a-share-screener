@@ -28,24 +28,53 @@ function renderReport(value: ScreenResultView): string {
       `(bar files fetched this run: ${value.stocksFetched}).`,
   )
   if (value.candidates.length > 0) {
-    lines.push('')
-    lines.push('code     name             board    limit-up   surge   cooldown  cool-ref    days  close')
-    for (const hit of value.candidates) {
-      const evidence = hit.evidence as Record<string, number | string>
+    if (value.strategy === 'low_flat_limit_up') {
+      // The classic limit-up layout, kept verbatim for that strategy.
+      lines.push('')
+      lines.push('code     name             board    limit-up   surge   cooldown  cool-ref    days  close')
+      for (const hit of value.candidates) {
+        const evidence = hit.evidence as Record<string, number | string>
+        lines.push(
+          `${hit.code}  ${hit.name.padEnd(12).slice(0, 12)}  ${hit.board.padEnd(7)}  ` +
+            `${String(evidence.limitUpDate ?? '-')}  ${String(evidence.limitUpVolumeSurge ?? '-').padStart(4)}x  ` +
+            `${String(evidence.cooldownVolumeRatio ?? '-').padStart(7)}  ${String(evidence.cooldownRefDate ?? '-')}  ` +
+            `${String(evidence.daysSinceLimitUp ?? '-').padStart(4)}  ` +
+            `${evidence.close ?? '-'}`,
+        )
+      }
+      lines.push('')
       lines.push(
-        `${hit.code}  ${hit.name.padEnd(12).slice(0, 12)}  ${hit.board.padEnd(7)}  ` +
-          `${String(evidence.limitUpDate ?? '-')}  ${String(evidence.limitUpVolumeSurge ?? '-').padStart(4)}x  ` +
-          `${String(evidence.cooldownVolumeRatio ?? '-').padStart(7)}  ${String(evidence.cooldownRefDate ?? '-')}  ` +
-          `${String(evidence.daysSinceLimitUp ?? '-').padStart(4)}  ` +
-          `${evidence.close ?? '-'}`,
+        'limit-up/surge cite the most recent volume-heavy limit-up day; cooldown/cool-ref/days cite the day that ' +
+          'also satisfies the pullback+cooldown pattern — the two may differ when only an older day qualifies. ' +
+          'Each candidate carries full evidence fields (drawdown, percentile, flat metrics) in its result entry.',
       )
+    } else {
+      // Generic layout for every other strategy: columns are the union of the
+      // candidates' evidence keys (minus close, rendered last), so a new
+      // strategy needs no renderer change.
+      const evidenceKeys: string[] = []
+      for (const hit of value.candidates) {
+        for (const key of Object.keys(hit.evidence)) {
+          if (key !== 'close' && !evidenceKeys.includes(key)) evidenceKeys.push(key)
+        }
+      }
+      const header = ['code', 'name', 'board', ...evidenceKeys, 'close']
+      lines.push('')
+      lines.push(header.map((h, i) => (i === 0 ? h.padEnd(9) : h.padEnd(h.length + 2))).join(''))
+      for (const hit of value.candidates) {
+        const evidence = hit.evidence as Record<string, number | string | boolean>
+        const cells = [
+          hit.code,
+          hit.name.slice(0, 12),
+          hit.board,
+          ...evidenceKeys.map((key) => String(evidence[key] ?? '-')),
+          String(evidence.close ?? '-'),
+        ]
+        lines.push(cells.map((c, i) => (i === 0 ? c.padEnd(9) : c.padEnd(String(header[i]).length + 2))).join(''))
+      }
+      lines.push('')
+      lines.push('Each candidate carries the full evidence fields of its atomic filters in its result entry.')
     }
-    lines.push('')
-    lines.push(
-      'limit-up/surge cite the most recent volume-heavy limit-up day; cooldown/cool-ref/days cite the day that ' +
-        'also satisfies the pullback+cooldown pattern — the two may differ when only an older day qualifies. ' +
-        'Each candidate carries full evidence fields (drawdown, percentile, flat metrics) in its result entry.',
-    )
   } else {
     lines.push('No stock matched this strategy with the given parameters.')
   }

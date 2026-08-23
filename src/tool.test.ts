@@ -63,3 +63,72 @@ describe('plugin Config schema', () => {
     expect(resolved.minListDays).toBe(365)
   })
 })
+
+describe('screen tool result rendering', () => {
+  it('renders non-limit-up strategies with generic evidence columns, not the limit-up table', () => {
+    const screen = createScreenTool(deps)
+    const flatBaseView = {
+      strategy: 'flat_base_low',
+      dataSource: 'sina',
+      generatedAt: '2026-08-23T00:00:00.000Z',
+      scanned: 1,
+      matched: 1,
+      candidates: [
+        {
+          code: '600004',
+          fullCode: '600004.SH',
+          name: '平底股份',
+          board: 'main',
+          strategy: 'flat_base_low',
+          evidence: { percentileInWindow: 0.08, flatNetChange: 0.03, close: 5.5 },
+        },
+      ],
+      skipped: {},
+      stocksFetched: 0,
+      durationMs: 1000,
+      notes: [],
+      disclaimer: 'DISCLAIMER',
+    }
+    const text = screen.output!.render!( {} as never, flatBaseView)[0]!.text
+    expect(text).toContain('percentileInWindow')
+    expect(text).toContain('flatNetChange')
+    expect(text).not.toContain('limit-up')
+    expect(text).toContain('600004')
+  })
+
+  it('keeps the limit-up table verbatim for low_flat_limit_up', () => {
+    const screen = createScreenTool(deps)
+    const view = {
+      strategy: 'low_flat_limit_up',
+      dataSource: 'sina',
+      generatedAt: '2026-08-23T00:00:00.000Z',
+      scanned: 1,
+      matched: 1,
+      candidates: [
+        {
+          code: '002777',
+          fullCode: '002777.SZ',
+          name: '久远银海',
+          board: 'main',
+          strategy: 'low_flat_limit_up',
+          evidence: {
+            limitUpDate: '20260513',
+            limitUpVolumeSurge: 2.13,
+            cooldownVolumeRatio: 0.3423,
+            cooldownRefDate: '20260513',
+            daysSinceLimitUp: 71,
+            close: 12.51,
+          },
+        },
+      ],
+      skipped: {},
+      stocksFetched: 0,
+      durationMs: 1000,
+      notes: [],
+      disclaimer: 'DISCLAIMER',
+    }
+    const text = screen.output!.render!({} as never, view)[0]!.text
+    expect(text).toContain('limit-up   surge   cooldown  cool-ref    days  close')
+    expect(text).toContain('20260513')
+  })
+})
