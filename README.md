@@ -43,23 +43,31 @@ The first full scan downloads history into a local disk cache and can take many 
 
 "Bottom + flat base": the stock trades at or below the 15th percentile of its recent price distribution (~3 years, clamped to available bars) while the last month is a flat, MA-converged base. No limit-up pattern is required. Pair it with `minListDays` / `maxListDays` to constrain listing age — e.g. `minListDays: 365` + `maxListDays: 1460` screens stocks listed 1–4 years.
 
+### `low_flat_breakout`
+
+"Deep low + volume breakout" — the right-side twin of `low_flat_limit_up`: deep below the window high (default ≥ 65% drawdown), a volume-heavy day (≥ 2× the prior 5-day average) recently closed ≥ 2% above the high of the preceding one-month flat base with the price holding out of the base since, and the MA20 stopped falling with price at or above it. Deliberately no `low_percentile` gate: a breakout close above the base high sits at the top of the bottom-side distribution by construction.
+
 ### `low_flat_limit_up`
 
 "Historical low, flat base, faded volume-heavy limit-up": the stock sits deep below its window high (default ≥ 65% drawdown) at the bottom of its recent distribution (≤ 15th percentile of ~3 years), the last month is a flat, MA-converged base, and within ~6 months there was a limit-up day on ≥ 2× the prior 5-day average volume that has since pulled back below its close while volume cooled to ≤ 40% of the limit-up day.
 
 All thresholds are per-call parameters with defaults (see `a_share_list_strategies`). Board-aware limit-up thresholds: 10% main board, 20% ChiNext/STAR, 30% BSE. All price-level math runs on a chained daily-return index, so splits and dividends cannot fake a crash or a bottom. Universe filters (all configurable): ST/delisting names, BSE, listings younger than `minListDays` (default 365) or older than `maxListDays` (default 0 = no upper bound).
 
-Both strategies are compositions of the atomic filters below.
+All strategies are compositions of the atomic filters below.
 
 ## Atomic filters & composition
 
-Every strategy is a declarative predicate over reusable atomic filters, combined with AND / OR / NOT into an expression tree. Five filters ship today (`a_share_list_filters` lists them with their parameters):
+Every strategy is a declarative predicate over reusable atomic filters, combined with AND / OR / NOT into an expression tree. Nine filters ship today (`a_share_list_filters` lists them with their parameters):
 
 | Filter | Gate |
 |---|---|
 | `deep_drawdown` | latest price ≥ X% below the window high |
 | `low_percentile` | latest price ranks ≤ Xth percentile of the window |
+| `bars_since_low` | the window low lies ≥ N bars back while price stays near it |
 | `flat_base` | recent window is flat with converged MAs |
+| `platform_breakout` | a volume-heavy close cleared the preceding flat base's high and held |
+| `ma_stabilization` | the MA stopped falling (slope ≥ X) and price sits at/above it |
+| `volatility_regime` | annualized realized volatility inside [min, max] |
 | `volume_limit_up` | a volume-heavy limit-up day exists in the window |
 | `cooldown_pullback` | price pulled back below that close and volume cooled off |
 
