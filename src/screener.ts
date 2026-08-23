@@ -363,6 +363,7 @@ async function aggregateIndustries(
   const positions = new Map<string, number[]>()
   let withoutIndustry = 0
   let scanned = 0
+  let fetchFailed = 0
   for (const stock of stocks) {
     if (signal.aborted) throw abortError()
     let bars: BarsFile
@@ -370,7 +371,11 @@ async function aggregateIndustries(
       bars = await acquireBarsFile(config, dataSource, stock, startDate, today, signal, fetchedThisRun)
     } catch (err) {
       if (signal.aborted) throw abortError()
-      continue // industry medians tolerate a few missing members
+      // Industry medians tolerate a few missing members, but a systemic outage
+      // must stay visible: count it (the main loop's assertHealthy still acts
+      // as the loud backstop once the candidates are fetched again).
+      fetchFailed++
+      continue
     }
     scanned++
     if (scanned % 500 === 0) host.log('info', `industry pre-pass: ${scanned}/${stocks.length}`)
@@ -400,8 +405,16 @@ async function aggregateIndustries(
   }
   host.log(
     'info',
-    `industry aggregation: ${stats.size} industries over ${scanned} members (${withoutIndustry} without classification)`,
+    `industry aggregation: ${stats.size} industries over ${scanned} members ` +
+      `(${withoutIndustry} without classification${fetchFailed > 0 ? `, ${fetchFailed} fetch failures` : ''})`,
   )
+  if (fetchFailed > Math.max(10, Math.floor(stocks.length * 0.1))) {
+    host.log(
+      'warn',
+      `industry pre-pass: kline fetch failed for ${fetchFailed}/${stocks.length} members — ` +
+        `likely a systemic data-source outage; industry medians may be skewed`,
+    )
+  }
   return stats
 }
 

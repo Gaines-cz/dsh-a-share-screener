@@ -17,7 +17,7 @@ import { defaultCacheDir } from './cache.js'
 import { boardMemberCodes, findBoard, suggestBoards } from './datasources/boards.js'
 import { createDataSource, type DataSourceId } from './datasources/index.js'
 import { createFilterRegistry } from './filters/index.js'
-import { RateLimiter } from './http.js'
+import { RateLimiter, abortError } from './http.js'
 import { renderJson, renderMarkdown, tierResults, type ReportContext, type TieredEntry } from './report.js'
 import {
   acquireBarsFile,
@@ -276,6 +276,9 @@ async function cmdScan(values: Record<string, unknown>): Promise<void> {
     for (;;) {
       const stock = queue.shift()
       if (stock === undefined) return
+      // Mirror syncBars: a worker must stop draining the queue once aborted,
+      // instead of miscounting the abort as kline-fetch-failed.
+      if (signal.aborted) throw abortError()
       try {
         const fileData = await acquireBarsFile(config, dataSource, stock, startDate, today, signal, fetched)
         const tail = fileData.bars[fileData.bars.length - 1]?.[0]
@@ -295,6 +298,7 @@ async function cmdScan(values: Record<string, unknown>): Promise<void> {
         }
         entries.push({ stock, diagnosis: diag })
       } catch (err) {
+        if (signal.aborted) throw abortError()
         skipped['kline-fetch-failed'] = (skipped['kline-fetch-failed'] ?? 0) + 1
         console.warn(`K线获取失败 ${stock.fullCode}: ${err instanceof Error ? err.message : String(err)}`)
       }
