@@ -105,6 +105,18 @@ describe('platform_breakout', () => {
     expect(result.evidence.breakoutDate).toBe(bars[38]!.date)
   })
 
+  it('does not treat a zero-volume prior as an infinite surge (suspended/resumed name)', () => {
+    // Flat base with ZERO volume on the 5 bars before the breakout day: the
+    // surge must read 0 (not Infinity), so the breakout fails the volume gate.
+    const overrides: Record<number, { ret?: number; volume?: number }> = {}
+    for (let i = 33; i <= 37; i++) overrides[i] = { volume: 0 }
+    overrides[38] = { ret: 0.06, volume: 3000 }
+    overrides[39] = { ret: 0 }
+    const result = platformBreakoutFilter.apply(derive(META, series(40, overrides)), params())
+    expect(result.passed).toBe(false)
+    expect(result.evidence.breakoutDate).toBeNull()
+  })
+
   it('ignores a breakout older than the search window', () => {
     // Breakout at 25 in a 40-bar series: 14 bars back > breakoutWindowBars 10.
     const bars = breakoutFixture(25)

@@ -96,8 +96,11 @@ export const platformBreakoutFilter: Filter = {
         if (ctx.idx[i]! > baseMax) baseMax = ctx.idx[i]!
       }
       if (ctx.idx[b]! < baseMax * (1 + (params.minBreakoutMargin as number))) continue
-      // 3. Volume surge vs the prior 5 bars.
-      const surge = ctx.bars[b]!.volume / meanVolume(ctx.bars, b - 5, b)
+      // 3. Volume surge vs the prior 5 bars. Guard a zero prior average the
+      // same way derive() does for limit-up days: suspended-then-resumed names
+      // have zero-volume priors, and volume/0 = Infinity must not pass.
+      const prevAvg = meanVolume(ctx.bars, b - 5, b)
+      const surge = prevAvg <= 0 ? 0 : ctx.bars[b]!.volume / prevAvg
       if (surge < (params.minBreakoutSurge as number)) continue
       // 4. Held out of the base ever since.
       let held = true

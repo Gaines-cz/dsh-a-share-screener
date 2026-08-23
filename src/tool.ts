@@ -83,11 +83,13 @@ function summarizePredicate(raw: unknown): string {
  * Build the throwaway registry holding the ad-hoc custom strategy for a
  * predicate scan. Parameters resolve against the merged filter param docs
  * exactly like a shipped strategy, so `params` overrides work unchanged.
+ * `summary` is the human-readable rendering of the RAW DSL (the engine
+ * Predicate has no all/any/not shape to summarize).
  */
-function customRegistry(deps: ToolDeps, predicate: Predicate): StrategyRegistry {
+function customRegistry(deps: ToolDeps, predicate: Predicate, summary: string): StrategyRegistry {
   const strategy = composeStrategy({
     id: CUSTOM_ID,
-    description: `Ad-hoc composition: ${summarizePredicate(predicate)}`,
+    description: `Ad-hoc composition: ${summary}`,
     predicate,
     filters: deps.filters,
     extraParamDocs: {
@@ -273,7 +275,7 @@ export function createScreenTool(deps: ToolDeps): ToolDefinition {
       let title: string | undefined
       if (hasPredicate) {
         const predicate = toPredicate(args.predicate, deps.filters)
-        registry = customRegistry(deps, predicate)
+        registry = customRegistry(deps, predicate, summarizePredicate(args.predicate))
         strategyId = CUSTOM_ID
         title = `custom(${summarizePredicate(args.predicate)})`
       }

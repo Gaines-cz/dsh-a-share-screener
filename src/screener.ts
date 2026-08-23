@@ -312,24 +312,26 @@ const INDUSTRY_DEEP_THRESHOLD = 0.6
 /**
  * One stock's parameter-independent cycle summary for industry aggregation:
  * full-window drawdown-from-high and 730-bar window percentile, both on the
- * chained return index.
+ * chained return index. The percentile is a single O(window) backward count
+ * (identical to `low_percentile` semantics), not a rolling-window shift.
  */
 function cycleSummary(series: SeriesBar[]): { dd: number; pos: number } {
-  let idx = 1
+  const idx: number[] = new Array(series.length)
+  idx[0] = 1
   let max = 1
-  const window: number[] = []
-  for (const bar of series) {
-    idx *= 1 + (bar.ret === null ? 0 : bar.ret)
-    if (idx > max) max = idx
-    window.push(idx)
-    if (window.length > INDUSTRY_POS_WINDOW) window.shift()
+  for (let i = 1; i < series.length; i++) {
+    const ret = series[i]!.ret
+    idx[i] = idx[i - 1]! * (1 + (ret === null ? 0 : ret))
+    if (idx[i]! > max) max = idx[i]!
   }
-  const dd = max > 0 ? 1 - idx / max : 0
+  const current = idx[idx.length - 1]!
+  const dd = max > 0 ? 1 - current / max : 0
+  const window = Math.min(INDUSTRY_POS_WINDOW, series.length)
   let below = 0
-  for (const value of window) {
-    if (value <= idx) below++
+  for (let i = series.length - window; i < series.length; i++) {
+    if (idx[i]! <= current) below++
   }
-  const pos = window.length > 0 ? below / window.length : 1
+  const pos = window > 0 ? below / window : 1
   return { dd, pos }
 }
 
@@ -343,7 +345,12 @@ function median(values: number[]): number {
  * Industry-cycle aggregation pre-pass: walk the whole (pre-whitelist) universe,
  * summarize each member's cycle position, and aggregate per industry board.
  * Industry stats are market-level facts, so the code whitelist does NOT shrink
- * the aggregation set — it only restricts candidates.
+ * the aggregation set — it only restricts candidates. Two consequences:
+ * - stats are computed over the UNIVERSE-FILTERED members (ST / BSE / listings
+ *   younger than minListDays are excluded), so they describe the screener's
+ *   investable universe, not the raw exchange listing
+ * - a code-restricted industry scan still fetches bars for the whole market,
+ *   because the per-board medians must be market-wide
  */
 async function aggregateIndustries(
   host: ScreenerHost,
