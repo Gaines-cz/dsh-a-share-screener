@@ -49,6 +49,16 @@ interface StockMeta {
    * `capabilities.industry` is true (extension point for future vendors).
    */
   industry?: string;
+  /**
+   * Total market capitalization in CNY yuan (list-time snapshot). Only
+   * populated by sources whose `capabilities.marketCap` is true.
+   */
+  totalMarketCapYuan?: number;
+  /**
+   * Free-float market capitalization in CNY yuan (list-time snapshot). Only
+   * populated by sources whose `capabilities.marketCap` is true.
+   */
+  floatMarketCapYuan?: number;
 }
 /**
  * One daily bar. Prices are in the source's native units (raw or
@@ -65,6 +75,13 @@ interface Bar {
   close: number;
   volume: number;
   /**
+   * Traded value of the bar in CNY yuan. Only published by sources whose
+   * `capabilities.amount` is true (e.g. Eastmoney klines); null/undefined
+   * otherwise. Filters that need it declare `requires.amount` and refuse to
+   * run on sources without the capability instead of approximating.
+   */
+  amount?: number | null;
+  /**
    * Previous close as published by the source. When present and positive it is
    * the ex-rights-adjusted previous close, so `close / preClose - 1` is the
    * true daily return even across corporate actions. Null when the source does
@@ -72,7 +89,12 @@ interface Bar {
    */
   preClose: number | null;
 }
-/** Cache tuple form of {@link Bar}: [date, open, high, low, close, volume, preClose]. */
+/**
+ * Cache tuple form of {@link Bar}: [date, open, high, low, close, volume,
+ * preClose, amount?]. The 8th element is optional so caches written before
+ * the amount field existed (7-column tuples) still parse — their amount is
+ * simply undefined.
+ */
 //#endregion
 //#region src/datasources/types.d.ts
 /** Optional capabilities a source may or may not provide. */
@@ -83,7 +105,20 @@ interface DataSourceCapabilities {
    * clear capability gap instead of failing silently.
    */
   readonly industry: boolean;
+  /**
+   * Whether `listStocks` populates `StockMeta.totalMarketCapYuan` /
+   * `floatMarketCapYuan`. Absent/false means market-cap filters are
+   * unavailable on this source.
+   */
+  readonly marketCap?: boolean;
+  /**
+   * Whether `dailyBars` populates `Bar.amount` (traded value per bar).
+   * Absent/false means amount/liquidity filters are unavailable.
+   */
+  readonly amount?: boolean;
 }
+/** What a filter may declare it needs from the active data source. */
+
 /** A stock-list / kline vendor, e.g. Eastmoney. */
 interface DataSource {
   /** Stable identifier surfaced in results and logs. */

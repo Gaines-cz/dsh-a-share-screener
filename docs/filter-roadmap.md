@@ -6,9 +6,12 @@
 ## 状态（2026-08-23）
 
 - **PR#0 已被主干吸收**：分支 `feat/list-age-and-flat-low-260823`（a9ccfce）把 report gateLine 改为动态渲染（诊断里有哪些 gate 渲染哪些），并为新过滤器铺了 `maxListDays` 宇宙上限与 `flat_base_low` 策略。新过滤器只需在 `GATE_CELLS`/`GATE_LABELS` 加条目。
-- **Phase 1 已实现**（分支 `feat/phase1-filters-260823`，基于 a9cccce）：`ma_stabilization` / `bars_since_low` / `platform_breakout` / `volatility_regime` 四个过滤器 + 策略 `low_flat_breakout` + tool 渲染泛化。
+- **Phase 1 已实现**（分支 `feat/phase1-filters-260823`，基于 a9ccfce）：`ma_stabilization` / `bars_since_low` / `platform_breakout` / `volatility_regime` 四个过滤器 + 策略 `low_flat_breakout` + tool 渲染泛化。
+- **Phase 2 已实现**（同分支）：clist f100/f20/f21（行业 + 市值快照）、eastmoney kline amount（tuple 升 8 列、旧 7 列缓存兼容）、`industry_clearance`（两遍扫描行业聚合，`DerivedCtx.industry` 注入）/ `market_cap_band` / `amount_liquidity` 三过滤器、能力闸门（`Filter.requires` → `Strategy.requires` → 扫描开始响亮报错，绝不静默降级）。
+- **Phase 3.1 已实现**：`a_share_screen` 支持 `predicate` JSON DSL（all/any/not，≤3 层、≤12 叶，与 strategy 互斥；CLI 等价 `--predicate`）；OR/NOT 树命中证据经 sanitize 去除 null；`a_share_list_filters` 输出每个过滤器的数据要求。
 - **实现期设计修正**：右侧策略去掉了 `low_percentile` 闸门——突破收盘价按构造处于底部区间分布顶端（分位 ≈ 100%），与"最新价分位低"结构性互斥；位置语义由 `deep_drawdown` 承担。`platform_breakout` 自含突破前平台检验，故右侧策略也不叠 `flat_base`（突破后最新窗口必不平）。
 - 顺带修复：`tool.ts` 的扫描结果表原为 limit-up 策略硬编码列，其他策略（如 `flat_base_low`）会渲染成整排 `-`；现改为 limit-up 保持原文、其余策略走通用证据列。
+- **待办**：Phase 3.2 `turnover_band`（f21 流通市值 + amount 均已就绪，只差组合）、Phase 3.3 估值闸门（需独立立项）。
 
 ---
 

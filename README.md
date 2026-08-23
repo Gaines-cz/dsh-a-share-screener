@@ -59,17 +59,32 @@ All strategies are compositions of the atomic filters below.
 
 Every strategy is a declarative predicate over reusable atomic filters, combined with AND / OR / NOT into an expression tree. Nine filters ship today (`a_share_list_filters` lists them with their parameters):
 
-| Filter | Gate |
-|---|---|
-| `deep_drawdown` | latest price ≥ X% below the window high |
-| `low_percentile` | latest price ranks ≤ Xth percentile of the window |
-| `bars_since_low` | the window low lies ≥ N bars back while price stays near it |
-| `flat_base` | recent window is flat with converged MAs |
-| `platform_breakout` | a volume-heavy close cleared the preceding flat base's high and held |
-| `ma_stabilization` | the MA stopped falling (slope ≥ X) and price sits at/above it |
-| `volatility_regime` | annualized realized volatility inside [min, max] |
-| `volume_limit_up` | a volume-heavy limit-up day exists in the window |
-| `cooldown_pullback` | price pulled back below that close and volume cooled off |
+| Filter | Gate | Needs |
+|---|---|---|
+| `deep_drawdown` | latest price ≥ X% below the window high | — |
+| `low_percentile` | latest price ranks ≤ Xth percentile of the window | — |
+| `bars_since_low` | the window low lies ≥ N bars back while price stays near it | — |
+| `flat_base` | recent window is flat with converged MAs | — |
+| `platform_breakout` | a volume-heavy close cleared the preceding flat base's high and held | — |
+| `ma_stabilization` | the MA stopped falling (slope ≥ X) and price sits at/above it | — |
+| `volatility_regime` | annualized realized volatility inside [min, max] | — |
+| `volume_limit_up` | a volume-heavy limit-up day exists in the window | — |
+| `cooldown_pullback` | price pulled back below that close and volume cooled off | — |
+| `industry_clearance` | the industry board itself is in deep clearance (median member drawdown / deep share) | industry (all shipped sources) |
+| `market_cap_band` | total market cap inside [min, max] 亿元 | marketCap (all shipped sources) |
+| `amount_liquidity` | median daily traded value ≥ X 亿元 | amount (eastmoney only) |
+
+Filters that need a capability the active source lacks refuse to run — the scan aborts loudly with the missing capability named instead of silently degrading.
+
+## Ad-hoc predicates
+
+`a_share_screen` also accepts a `predicate` (mutually exclusive with `strategy`): a small JSON DSL over the atomic filter ids, e.g.
+
+```json
+{ "all": ["deep_drawdown", { "any": ["platform_breakout", "volume_limit_up"] }] }
+```
+
+Groups are `{ "all": [...] }` (AND), `{ "any": [...] }` (OR), `{ "not": … }` (NOT); leaves are filter ids from `a_share_list_filters`; max depth 3, max 12 leaves. `params` tunes the composition exactly like a registered strategy. The CLI equivalent is `--predicate '<json>'`. Strategies using `industry_clearance` trigger a market-wide aggregation pre-pass; its per-board statistics (median drawdown, deep share, members) appear in each candidate's evidence.
 
 Composition runs one shared derivation pass per stock (chained return index + pre-computed limit-up days), then evaluates the tree: a short-circuit pass for strict hits and a full pass that produces per-gate metrics for the tiered report — which is how "near-miss" candidates (one gate short) are surfaced.
 
@@ -80,8 +95,10 @@ Three free, token-less sources ship today; `sina` is the default (its 前复权 
 | Source | Token | Notes |
 |---|---|---|
 | Sina (default) | none | 前复权 daily bars, 1023 bars per request; the recommended primary |
-| Eastmoney | none | back-adjusted klines per stock; clist host fails over realtime → delayed |
+| Eastmoney | none | back-adjusted klines per stock (the only source with per-bar amount); clist host fails over realtime → delayed |
 | Tencent | none | 后复权 fallback (report prices run high); backup only |
+
+The stock list (with industry + market caps) comes from the shared Eastmoney clist endpoint for all three sources.
 
 Every adapter sits behind a `DataSource` interface (`src/datasources/types.ts`); the screener, tools, and plugin entry import only that interface, never a concrete vendor. Cache lives under `$DSH_HOME/a-share-screener/<source-id>/` (override with `cacheDir`).
 

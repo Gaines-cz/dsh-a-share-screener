@@ -59,17 +59,32 @@ dsh --profile myprofile
 
 每个策略都是对可复用原子过滤器的声明式谓词，通过 AND / OR / NOT 组合成表达式树。当前内置九个过滤器（`a_share_list_filters` 可列出各自的参数）：
 
-| 过滤器 | 闸门 |
-|---|---|
-| `deep_drawdown` | 最新价较窗口高点回撤 ≥ X% |
-| `low_percentile` | 最新价处于窗口 ≤ X 分位 |
-| `bars_since_low` | 窗口最低点距今 ≥ N 根K线且价格仍贴近低点 |
-| `flat_base` | 近期窗口横盘走平且均线粘合 |
-| `platform_breakout` | 放量收盘突破前平台高点且此后守住平台上方 |
-| `ma_stabilization` | 均线止跌（斜率 ≥ X）且价格站上均线 |
-| `volatility_regime` | 年化已实现波动率落在 [下限, 上限] 区间 |
-| `volume_limit_up` | 窗口内存在放量涨停日 |
-| `cooldown_pullback` | 涨停后回落跌破收盘价且量能冷却 |
+| 过滤器 | 闸门 | 数据要求 |
+|---|---|---|
+| `deep_drawdown` | 最新价较窗口高点回撤 ≥ X% | — |
+| `low_percentile` | 最新价处于窗口 ≤ X 分位 | — |
+| `bars_since_low` | 窗口最低点距今 ≥ N 根K线且价格仍贴近低点 | — |
+| `flat_base` | 近期窗口横盘走平且均线粘合 | — |
+| `platform_breakout` | 放量收盘突破前平台高点且此后守住平台上方 | — |
+| `ma_stabilization` | 均线止跌（斜率 ≥ X）且价格站上均线 | — |
+| `volatility_regime` | 年化已实现波动率落在 [下限, 上限] 区间 | — |
+| `volume_limit_up` | 窗口内存在放量涨停日 | — |
+| `cooldown_pullback` | 涨停后回落跌破收盘价且量能冷却 | — |
+| `industry_clearance` | 行业板块本身处于深度出清（成员中位回撤 / 深跌占比） | 行业分类（三个内置源均支持） |
+| `market_cap_band` | 总市值落在 [下限, 上限] 亿元 | 市值快照（三个内置源均支持） |
+| `amount_liquidity` | 日成交额中位数 ≥ X 亿元 | 逐bar成交额（仅东财） |
+
+声明了数据要求的过滤器在当前数据源缺该能力时会**响亮拒绝**运行——扫描直接报错并指明缺什么能力，绝不静默降级。
+
+## 临时组合（Ad-hoc predicate）
+
+`a_share_screen` 还接受 `predicate`（与 `strategy` 互斥）：一个基于原子过滤器 id 的小型 JSON DSL，例如
+
+```json
+{ "all": ["deep_drawdown", { "any": ["platform_breakout", "volume_limit_up"] }] }
+```
+
+组为 `{ "all": [...] }`（AND）、`{ "any": [...] }`（OR）、`{ "not": … }`（NOT）；叶子是 `a_share_list_filters` 列出的过滤器 id；最多 3 层嵌套、12 个叶子。`params` 像注册策略一样调参。CLI 等价用法 `--predicate '<json>'`。含 `industry_clearance` 的组合会先跑全市场行业聚合，每只候选的证据里带所属板块的中位回撤 / 深跌占比 / 成员数。
 
 组合求值时每只股票只做一次共享推导（链式收益率指数 + 预计算的涨停日），然后对表达式树求值：短路路径产出严格命中，全量路径产出逐闸门指标供分层报告——"近邻候选"（只差一道闸）即由此而来。
 
@@ -80,8 +95,10 @@ dsh --profile myprofile
 | 数据源 | token | 说明 |
 |---|---|---|
 | 新浪（默认） | 无 | 前复权日线，单请求 1023 根；推荐主源 |
-| 东方财富 | 无 | 按股后复权K线；列表域名实时→延迟自动故障转移 |
+| 东方财富 | 无 | 按股后复权K线（唯一带逐bar成交额的源）；列表域名实时→延迟自动故障转移 |
 | 腾讯 | 无 | 后复权备胎（报告价格会虚高）；仅作后备 |
+
+三个源的股票清单（含行业分类与市值快照）均来自共享的东财 clist 接口。
 
 每个适配器都位于 `DataSource` 接口之后（`src/datasources/types.ts`）；screener、工具、插件入口只依赖该接口，绝不 import 具体厂商。缓存在 `$DSH_HOME/a-share-screener/<source-id>/`（可用 `cacheDir` 覆盖）。
 
