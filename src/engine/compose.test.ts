@@ -123,3 +123,73 @@ describe('composeStrategy', () => {
     expect(strategy.diagnose?.(input, {})).toBeNull()
   })
 })
+
+describe('composeStrategy data requirements', () => {
+  it('unions the leaf filters\' requires into the strategy', () => {
+    const needIndustry = { ...filter('ind', true), requires: { industry: true } }
+    const needAmount = { ...filter('amt', true), requires: { amount: true } }
+    const plain = filter('plain', true)
+    const r = registry(needIndustry as Filter, needAmount as Filter, plain)
+    const strategy = composeStrategy({ id: 'x', description: 'd', predicate: and('ind', 'amt', 'plain'), filters: r })
+    expect(strategy.requires).toEqual({ industry: true, amount: true })
+    const none = composeStrategy({ id: 'y', description: 'd', predicate: and('plain'), filters: r })
+    expect(none.requires).toBeUndefined()
+  })
+
+  it('carries industry stats from the screen input into the derived context', () => {
+    const seen: (string | undefined)[] = []
+    const spy: Filter = {
+      id: 'spy',
+      description: 'spy',
+      paramDocs: {},
+      apply: (ctx) => {
+        seen.push(ctx.industry?.industry)
+        return { passed: true, evidence: { ok: 1 } }
+      },
+    }
+    const r = registry(spy)
+    const strategy = composeStrategy({ id: 'z', description: 'd', predicate: { kind: 'filter', filter: 'spy' }, filters: r })
+    strategy.screen(
+      { ...input, industryStats: { industry: '银行', members: 10, medDrawdown: 0.5, medPos: 0.3, deepShare: 0.4 } },
+      {},
+    )
+    expect(seen).toEqual(['银行'])
+  })
+})
+
+describe('composeStrategy hit evidence', () => {
+  it('drops null evidence from passing OR trees (short-circuited sibling)', () => {
+    const passing = filter('pass', true, {}, { good: 1 })
+    const failing = filter('fail', false, {}, { bad: null })
+    const r = registry(passing, failing)
+    const strategy = composeStrategy({
+      id: 'or-strategy',
+      description: 'd',
+      predicate: { kind: 'or', children: [{ kind: 'filter', filter: 'pass' }, { kind: 'filter', filter: 'fail' }] },
+      filters: r,
+    })
+    const hit = strategy.screen(input, {})
+    expect(hit).not.toBeNull()
+    // The failing sibling's null evidence must not leak into the hit.
+    expect(hit!.evidence.bad).toBeUndefined()
+    expect(hit!.evidence.good).toBe(1)
+    // Diagnosis still keeps the null for near-miss reporting.
+    const diag = strategy.diagnose!(input, {})
+    expect(diag!.metrics.bad).toBeNull()
+  })
+})
+
+describe('derive index floor (defensive)', () => {
+  it('clamps a corrupt ret <= -1 to a strictly positive chain', async () => {
+    const { derive } = await import('./derive.js')
+    const bad = series(4)
+    bad[1] = { ...bad[1]!, ret: -1.5 } // corrupt: -150% in one bar
+    bad[2] = { ...bad[2]!, ret: 0 }
+    bad[3] = { ...bad[3]!, ret: 0 }
+    const ctx = derive(META, bad)
+    // Every idx value stays > 0, so downstream ratios cannot divide by zero.
+    for (const value of ctx.idx) {
+      expect(value).toBeGreaterThan(0)
+    }
+  })
+})

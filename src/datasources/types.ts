@@ -15,6 +15,24 @@ export interface DataSourceCapabilities {
    * clear capability gap instead of failing silently.
    */
   readonly industry: boolean
+  /**
+   * Whether `listStocks` populates `StockMeta.totalMarketCapYuan` /
+   * `floatMarketCapYuan`. Absent/false means market-cap filters are
+   * unavailable on this source.
+   */
+  readonly marketCap?: boolean
+  /**
+   * Whether `dailyBars` populates `Bar.amount` (traded value per bar).
+   * Absent/false means amount/liquidity filters are unavailable.
+   */
+  readonly amount?: boolean
+}
+
+/** What a filter may declare it needs from the active data source. */
+export interface DataRequirements {
+  readonly industry?: boolean
+  readonly marketCap?: boolean
+  readonly amount?: boolean
 }
 
 /** A stock-list / kline vendor, e.g. Eastmoney. */

@@ -42,6 +42,16 @@ export interface StockMeta {
    * `capabilities.industry` is true (extension point for future vendors).
    */
   industry?: string
+  /**
+   * Total market capitalization in CNY yuan (list-time snapshot). Only
+   * populated by sources whose `capabilities.marketCap` is true.
+   */
+  totalMarketCapYuan?: number
+  /**
+   * Free-float market capitalization in CNY yuan (list-time snapshot). Only
+   * populated by sources whose `capabilities.marketCap` is true.
+   */
+  floatMarketCapYuan?: number
 }
 
 /**
@@ -59,6 +69,13 @@ export interface Bar {
   close: number
   volume: number
   /**
+   * Traded value of the bar in CNY yuan. Only published by sources whose
+   * `capabilities.amount` is true (e.g. Eastmoney klines); null/undefined
+   * otherwise. Filters that need it declare `requires.amount` and refuse to
+   * run on sources without the capability instead of approximating.
+   */
+  amount?: number | null
+  /**
    * Previous close as published by the source. When present and positive it is
    * the ex-rights-adjusted previous close, so `close / preClose - 1` is the
    * true daily return even across corporate actions. Null when the source does
@@ -67,17 +84,31 @@ export interface Bar {
   preClose: number | null
 }
 
-/** Cache tuple form of {@link Bar}: [date, open, high, low, close, volume, preClose]. */
-export type BarTuple = [string, number, number, number, number, number, number | null]
+/**
+ * Cache tuple form of {@link Bar}: [date, open, high, low, close, volume,
+ * preClose, amount?]. The 8th element is optional so caches written before
+ * the amount field existed (7-column tuples) still parse — their amount is
+ * simply undefined.
+ */
+export type BarTuple = [string, number, number, number, number, number, number | null, (number | null)?]
 
 /** Serialize a bar to its cache tuple. */
 export function toBarTuple(bar: Bar): BarTuple {
-  return [bar.date, bar.open, bar.high, bar.low, bar.close, bar.volume, bar.preClose]
+  return [bar.date, bar.open, bar.high, bar.low, bar.close, bar.volume, bar.preClose, bar.amount ?? null]
 }
 
 /** Parse a cache tuple back into a bar. */
 export function fromBarTuple(t: BarTuple): Bar {
-  return { date: t[0], open: t[1], high: t[2], low: t[3], close: t[4], volume: t[5], preClose: t[6] }
+  return {
+    date: t[0],
+    open: t[1],
+    high: t[2],
+    low: t[3],
+    close: t[4],
+    volume: t[5],
+    preClose: t[6],
+    amount: t[7] ?? null,
+  }
 }
 
 /** Strategy-facing bar: what every strategy may rely on. */
@@ -85,6 +116,12 @@ export interface SeriesBar {
   date: string
   close: number
   volume: number
+  /**
+   * Traded value in CNY yuan when the source publishes it, else null. Filters
+   * that need it declare `requires.amount`; strategies wiring them must run on
+   * an amount-capable source (the screener enforces this loudly).
+   */
+  amount?: number | null
   /**
    * True daily return of this bar (fraction, e.g. 0.098). Null only for the
    * first bar of a series when the source publishes no previous close.
@@ -108,7 +145,7 @@ export function barsToSeries(bars: Bar[]): SeriesBar[] {
       const prev = bars[i - 1]!
       if (prev.close > 0) ret = bar.close / prev.close - 1
     }
-    out.push({ date: bar.date, close: bar.close, volume: bar.volume, ret })
+    out.push({ date: bar.date, close: bar.close, volume: bar.volume, amount: bar.amount ?? null, ret })
   }
   return out
 }

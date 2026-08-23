@@ -34,3 +34,15 @@ export function maxOf(values: number[]): number {
   for (const value of values) if (value > max) max = value
   return max
 }
+
+/**
+ * Median of a numeric array (average of the two middle values for an even
+ * length, matching the established filter semantics). Copies before sorting,
+ * so callers never observe a mutated input. Returns NaN for an empty input —
+ * callers gate on empty before calling.
+ */
+export function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2
+}

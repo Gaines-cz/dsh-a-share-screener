@@ -12,8 +12,10 @@ import { join } from 'node:path'
 import { defaultCacheDir, readJson, writeJson } from './cache.js'
 import type { DataSource } from './datasources/index.js'
 import { abortError } from './http.js'
-import type { StrategyHit, StrategyRegistry } from './strategies/registry.js'
-import { barsToSeries, dateMinusDays, fromBarTuple, toBarTuple, ymd, type BarTuple, type StockMeta } from './types.js'
+import type { IndustryStats } from './engine/types.js'
+import type { Strategy, StrategyHit, StrategyRegistry } from './strategies/registry.js'
+import { median } from './engine/math.js'
+import { barsToSeries, dateMinusDays, fromBarTuple, toBarTuple, ymd, type BarTuple, type SeriesBar, type StockMeta } from './types.js'
 
 /** Plugin configuration fields the screener consumes. */
 export interface ScreenerConfig {
@@ -158,13 +160,16 @@ async function prepareUniverse(
   if (refresh || !stocksCache || (stocksCache.fetchedAt ?? '') < today) {
     try {
       const stocks = await dataSource.listStocks(signal)
+      // Assign only after a successful persist so a failed write falls back to
+      // the previously cached list (and the "no cache to fall back" throw
+      // still fires when nothing was cached before).
+      await writeJson(stocksFile, { fetchedAt: today, stocks })
       stocksCache = { fetchedAt: today, stocks }
-      await writeJson(stocksFile, stocksCache)
     } catch (err) {
       if (signal.aborted) throw err
       if (stocksCache === undefined) throw err // no cache to fall back on
       warn(
-        `stock list fetch failed (${err instanceof Error ? err.message : String(err)}); ` +
+        `stock list fetch/persist failed (${err instanceof Error ? err.message : String(err)}); ` +
           `using cached list from ${stocksCache.fetchedAt ?? 'unknown date'}`,
       )
     }
@@ -283,6 +288,123 @@ function assertHealthy(skipped: Record<string, number>, universeSize: number): v
   }
 }
 
+/** Refuse silently-degraded runs: every declared data requirement must be served. */
+function assertCapabilities(strategy: Strategy, dataSource: DataSource): void {
+  const req = strategy.requires
+  if (!req) return
+  const caps = dataSource.capabilities
+  const missing: string[] = []
+  if (req.industry && !caps.industry) missing.push('industry classification')
+  if (req.marketCap && !caps.marketCap) missing.push('market cap')
+  if (req.amount && !caps.amount) missing.push('per-bar traded value (amount)')
+  if (missing.length > 0) {
+    throw new Error(
+      `strategy '${strategy.id}' requires ${missing.join(', ')} which data source '${dataSource.id}' does not ` +
+        `provide — the scan would silently degrade. Pick a source with those capabilities instead of approximating.`,
+    )
+  }
+}
+
+/** Percentile window for the industry-cycle pre-pass (bars, clamped to available data). */
+const INDUSTRY_POS_WINDOW = 730
+/** "Deep" drawdown threshold for the industry deep-share statistic. */
+const INDUSTRY_DEEP_THRESHOLD = 0.6
+
+/**
+ * One stock's parameter-independent cycle summary for industry aggregation:
+ * full-window drawdown-from-high and 730-bar window percentile, both on the
+ * chained return index. The percentile is a single O(window) backward count
+ * (identical to `low_percentile` semantics), not a rolling-window shift.
+ */
+function cycleSummary(series: SeriesBar[]): { dd: number; pos: number } {
+  const idx: number[] = new Array(series.length)
+  idx[0] = 1
+  let max = 1
+  for (let i = 1; i < series.length; i++) {
+    const ret = series[i]!.ret
+    // Same strictly-positive floor as engine/derive: a corrupt ret <= -1 must
+    // not poison the industry summary's drawdown/percentile ratios.
+    idx[i] = idx[i - 1]! * Math.max(1e-9, 1 + (ret === null ? 0 : ret))
+    if (idx[i]! > max) max = idx[i]!
+  }
+  const current = idx[idx.length - 1]!
+  const dd = max > 0 ? 1 - current / max : 0
+  const window = Math.min(INDUSTRY_POS_WINDOW, series.length)
+  let below = 0
+  for (let i = series.length - window; i < series.length; i++) {
+    if (idx[i]! <= current) below++
+  }
+  const pos = window > 0 ? below / window : 1
+  return { dd, pos }
+}
+
+/**
+ * Industry-cycle aggregation pre-pass: walk the whole (pre-whitelist) universe,
+ * summarize each member's cycle position, and aggregate per industry board.
+ * Industry stats are market-level facts, so the code whitelist does NOT shrink
+ * the aggregation set — it only restricts candidates. Two consequences:
+ * - stats are computed over the UNIVERSE-FILTERED members (ST / BSE / listings
+ *   younger than minListDays are excluded), so they describe the screener's
+ *   investable universe, not the raw exchange listing
+ * - a code-restricted industry scan still fetches bars for the whole market,
+ *   because the per-board medians must be market-wide
+ */
+async function aggregateIndustries(
+  host: ScreenerHost,
+  config: ScreenerConfig,
+  dataSource: DataSource,
+  stocks: StockMeta[],
+  startDate: string,
+  today: string,
+  signal: AbortSignal,
+  fetchedThisRun: Set<string>,
+): Promise<Map<string, IndustryStats>> {
+  const drawdowns = new Map<string, number[]>()
+  const positions = new Map<string, number[]>()
+  let withoutIndustry = 0
+  let scanned = 0
+  for (const stock of stocks) {
+    if (signal.aborted) throw abortError()
+    let bars: BarsFile
+    try {
+      bars = await acquireBarsFile(config, dataSource, stock, startDate, today, signal, fetchedThisRun)
+    } catch (err) {
+      if (signal.aborted) throw abortError()
+      continue // industry medians tolerate a few missing members
+    }
+    scanned++
+    if (scanned % 500 === 0) host.log('info', `industry pre-pass: ${scanned}/${stocks.length}`)
+    if (stock.industry === undefined) {
+      withoutIndustry++
+      continue
+    }
+    const summary = cycleSummary(barsToSeries(bars.bars.map(fromBarTuple)))
+    let dds = drawdowns.get(stock.industry)
+    if (!dds) drawdowns.set(stock.industry, (dds = []))
+    dds.push(summary.dd)
+    let poss = positions.get(stock.industry)
+    if (!poss) positions.set(stock.industry, (poss = []))
+    poss.push(summary.pos)
+  }
+  const stats = new Map<string, IndustryStats>()
+  for (const [industry, dds] of drawdowns) {
+    const poss = positions.get(industry) ?? []
+    const deep = dds.filter((dd) => dd >= INDUSTRY_DEEP_THRESHOLD).length
+    stats.set(industry, {
+      industry,
+      members: dds.length,
+      medDrawdown: median(dds),
+      medPos: median(poss),
+      deepShare: dds.length > 0 ? deep / dds.length : 0,
+    })
+  }
+  host.log(
+    'info',
+    `industry aggregation: ${stats.size} industries over ${scanned} members (${withoutIndustry} without classification)`,
+  )
+  return stats
+}
+
 /** Run one full screening pass. Throws loud, actionable errors on bad input. */
 export async function runScreen(
   host: ScreenerHost,
@@ -296,6 +418,7 @@ export async function runScreen(
   if (!strategy) {
     throw new Error(`unknown strategy '${args.strategyId}'. Available: ${registry.ids().join(', ')}`)
   }
+  assertCapabilities(strategy, dataSource)
   const params = registry.resolveParams(args.strategyId, args.params)
 
   const { stocks: filtered, skipped, today } = await prepareUniverse(config, dataSource, args.signal, args.refresh ?? false, (m) => host.log('warn', m))
@@ -305,6 +428,23 @@ export async function runScreen(
   const startDate = historyStartDate(config.historyBars)
   const fetchedThisRun = new Set<string>()
   const candidates: StrategyHit[] = []
+  const notes: string[] = []
+  let industryByStock: Map<string, IndustryStats> | undefined
+
+  // Industry strategies need market-level stats before any candidate can be
+  // judged: one extra pass over the whole universe (cache-warm after sync).
+  if (strategy.requires?.industry) {
+    industryByStock = new Map()
+    const stats = await aggregateIndustries(host, config, dataSource, filtered, startDate, today, args.signal, fetchedThisRun)
+    for (const stock of filtered) {
+      const stat = stock.industry === undefined ? undefined : stats.get(stock.industry)
+      if (stat !== undefined) industryByStock.set(stock.code, stat)
+    }
+    notes.push(
+      `industry cycle aggregated over ${stats.size} boards (median drawdown / deep share / members per candidate evidence)`,
+    )
+  }
+
   let scanned = 0
   for (const stock of universe) {
     if (args.signal.aborted) throw abortError()
@@ -322,7 +462,7 @@ export async function runScreen(
       host.log('info', `scan progress: ${scanned}/${universe.length}, matched ${candidates.length}`)
     }
     const series = barsToSeries(fileData.bars.map(fromBarTuple))
-    const hit = strategy.screen({ stock, bars: series }, params)
+    const hit = strategy.screen({ stock, bars: series, industryStats: industryByStock?.get(stock.code) }, params)
     if (hit) candidates.push(hit)
   }
   assertHealthy(skipped, universe.length)
@@ -338,7 +478,7 @@ export async function runScreen(
     skipped,
     stocksFetched: fetchedThisRun.size,
     durationMs: Date.now() - startedAt,
-    notes: [],
+    notes,
     disclaimer: DISCLAIMER,
   }
 }
@@ -390,5 +530,5 @@ export async function syncBars(
   return { scanned, stocksFetched: fetchedThisRun.size, skipped, startDate }
 }
 
-/** Export for tests. */
-export { prepareUniverse, filterByCodes }
+/** Export for tests and the standalone CLI's tiered-report scan path. */
+export { prepareUniverse, filterByCodes, aggregateIndustries, cycleSummary, assertCapabilities }

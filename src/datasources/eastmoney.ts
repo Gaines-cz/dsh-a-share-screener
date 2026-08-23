@@ -31,6 +31,12 @@ interface ListEntry {
   f13?: number
   f14?: string
   f26?: string | number
+  /** Industry-board name (行业板块), e.g. "银行". */
+  f100?: string
+  /** Total market cap in yuan. */
+  f20?: number
+  /** Free-float market cap in yuan. */
+  f21?: number
 }
 
 interface ListResponse {
@@ -53,7 +59,7 @@ async function fetchListPage(
     try {
       const url =
         `https://${host}/api/qt/clist/get?pn=${page}&pz=${pageSize}&po=1&np=1&fltt=2&invt=2&fid=f12` +
-        `&fs=${encodeURIComponent(FS_ALL)}&fields=f12,f13,f14,f26`
+        `&fs=${encodeURIComponent(FS_ALL)}&fields=f12,f13,f14,f26,f100,f20,f21`
       const json = (await fetchJson({ url, limiter, signal, retries: 1 })) as ListResponse
       workingListHost = host
       return json
@@ -75,6 +81,17 @@ const MAX_LIST_PAGES = 300
 
 function normalizeDate(value: string | number | undefined): string {
   return String(value ?? '').replace(/\D/g, '').slice(0, 8)
+}
+
+/** Normalize an industry-board name; empty/placeholder values become undefined. */
+function normalizeIndustry(value: string | undefined): string | undefined {
+  const name = String(value ?? '').trim()
+  return name === '' || name === '-' ? undefined : name
+}
+
+/** Normalize a market-cap field; non-finite/non-positive values become undefined. */
+function normalizeCap(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
 }
 
 /** Merge two bar lists, deduplicating by date (incoming wins), ascending. */
@@ -111,6 +128,9 @@ export async function fetchEastmoneyStockList(limiter: RateLimiter, signal: Abor
         name: String(entry.f14 ?? ''),
         board,
         listDate: normalizeDate(entry.f26),
+        industry: normalizeIndustry(entry.f100),
+        totalMarketCapYuan: normalizeCap(entry.f20),
+        floatMarketCapYuan: normalizeCap(entry.f21),
       })
     }
     const total = json.data?.total
@@ -158,11 +178,13 @@ export function createEastmoneyDataSource(limiter: RateLimiter): DataSource {
       const high = Number(parts[3])
       const low = Number(parts[4])
       const volume = Number(parts[5])
+      // Traded value in yuan; absent in short rows or non-finite in bad ones.
+      const amount = Number(parts[6])
       // Prices must be strictly positive: a zero close would send the chained
       // return index to 0 and poison every ratio-based condition with NaN.
       if (date.length !== 8 || ![open, close, high, low].every((v) => Number.isFinite(v) && v > 0)) continue
       if (!Number.isFinite(volume)) continue
-      bars.push({ date, open, high, low, close, volume, preClose: null })
+      bars.push({ date, open, high, low, close, volume, amount: Number.isFinite(amount) ? amount : null, preClose: null })
     }
     return bars.sort((a, b) => a.date.localeCompare(b.date))
   }
@@ -201,5 +223,5 @@ export function createEastmoneyDataSource(limiter: RateLimiter): DataSource {
     return mergeBars(cached, fresh)
   }
 
-  return { id: 'eastmoney', capabilities: { industry: false }, listStocks, dailyBars, refreshBars }
+  return { id: 'eastmoney', capabilities: { industry: true, marketCap: true, amount: true }, listStocks, dailyBars, refreshBars }
 }

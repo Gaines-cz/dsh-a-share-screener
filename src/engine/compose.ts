@@ -17,6 +17,7 @@ import type {
 import { derive } from './derive.js'
 import { evaluate } from './evaluate.js'
 import type { FilterRegistry, Predicate } from './types.js'
+import type { DataRequirements } from '../datasources/types.js'
 
 export interface ComposeOptions {
   id: string
@@ -85,39 +86,78 @@ export function mergedParamDocs(predicate: Predicate, filters: FilterRegistry, e
   return out
 }
 
+/** Union of the data requirements declared by every leaf filter in the tree. */
+function mergedRequirements(predicate: Predicate, filters: FilterRegistry): DataRequirements | undefined {
+  const ids = new Set<string>()
+  leafFilterIds(predicate, ids)
+  let industry = false
+  let marketCap = false
+  let amount = false
+  for (const id of ids) {
+    const filterReq = filters.require(id).requires
+    if (!filterReq) continue
+    industry = industry || filterReq.industry === true
+    marketCap = marketCap || filterReq.marketCap === true
+    amount = amount || filterReq.amount === true
+  }
+  if (!industry && !marketCap && !amount) return undefined
+  // Build only the declared flags, never explicit-undefined keys.
+  const req: { industry?: boolean; marketCap?: boolean; amount?: boolean } = {}
+  if (industry) req.industry = true
+  if (marketCap) req.marketCap = true
+  if (amount) req.amount = true
+  return req
+}
+
+/** Drop null-valued evidence entries so hit evidence stays strictly typed. */
+function sanitizeEvidence(evidence: Record<string, number | string | boolean | null>): Record<string, number | string | boolean> {
+  const out: Record<string, number | string | boolean> = {}
+  for (const [key, value] of Object.entries(evidence)) {
+    if (value !== null) out[key] = value
+  }
+  return out
+}
+
 /** Compose a predicate over atomic filters into a fully-featured Strategy. */
 export function composeStrategy(opts: ComposeOptions): Strategy {
   const paramDocs = mergedParamDocs(opts.predicate, opts.filters, opts.extraParamDocs)
   const canEvaluate = opts.canEvaluate ?? (() => true)
+  const requires = mergedRequirements(opts.predicate, opts.filters)
 
   return {
     id: opts.id,
     description: opts.description,
     paramDocs,
+    requires,
 
     screen(input: StrategyScreenInput, params: StrategyParams): StrategyHit | null {
       if (!canEvaluate(input, params)) return null
       const ctx = derive(input.stock, input.bars)
+      ctx.industry = input.industryStats
       const result = evaluate(opts.predicate, ctx, opts.filters, params, true)
       if (!result.passed) return null
-      const evidence = { ...result.evidence, close: ctx.bars[ctx.last]!.close, barsAnalyzed: ctx.bars.length }
       // For an all-AND strategy a strict match means every leaf filter passed
-      // with non-null evidence, so this cast is safe. OR/NOT trees can pass while
-      // some leaves still hold null evidence (short-circuited siblings, or a NOT
-      // over a failing child); such strategies must sanitize evidence before cast.
+      // with non-null evidence, so the sanitized cast is lossless. OR/NOT trees
+      // can pass while some leaves hold null evidence (short-circuited
+      // siblings, or a NOT over a failing child) — those nulls are dropped
+      // here so hit evidence keeps its non-null type.
+      const evidence = sanitizeEvidence(result.evidence)
+      evidence.close = ctx.bars[ctx.last]!.close
+      evidence.barsAnalyzed = ctx.bars.length
       return {
         code: input.stock.code,
         fullCode: input.stock.fullCode,
         name: input.stock.name,
         board: input.stock.board,
         strategy: opts.id,
-        evidence: evidence as Record<string, number | string | boolean>,
+        evidence,
       }
     },
 
     diagnose(input: StrategyScreenInput, params: StrategyParams): StrategyDiagnosis | null {
       if (!canEvaluate(input, params)) return null
       const ctx = derive(input.stock, input.bars)
+      ctx.industry = input.industryStats
       const result = evaluate(opts.predicate, ctx, opts.filters, params, false)
       const metrics = { ...result.evidence, close: ctx.bars[ctx.last]!.close, barsAnalyzed: ctx.bars.length }
       return { matched: result.passed, gates: result.gates, failedGates: result.failed, metrics }

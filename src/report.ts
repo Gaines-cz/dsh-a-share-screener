@@ -41,9 +41,17 @@ export function tierResults(entries: TieredEntry[]): TieredResult {
 const GATE_LABELS: Record<string, string> = {
   deep_drawdown: '距高点回撤',
   low_percentile: '历史分位',
+  bars_since_low: '距低点时长',
   flat_base: '平台走平+均线收敛',
+  platform_breakout: '平台放量突破',
+  ma_stabilization: '均线企稳',
+  volatility_regime: '波动率区间',
   volume_limit_up: '放量涨停',
   cooldown_pullback: '涨停后回落缩量',
+  industry_clearance: '行业出清',
+  market_cap_band: '市值区间',
+  amount_liquidity: '成交额下限',
+  turnover_band: '换手率区间',
 }
 
 export function gateLabel(gate: string): string {
@@ -80,12 +88,38 @@ interface GateCell {
 const GATE_CELLS: Record<string, GateCell> = {
   deep_drawdown: { label: '距高点', value: (m) => drawdownPct(m.drawdownFromHigh) },
   low_percentile: { label: '分位', value: (m) => pct(m.percentileInWindow) },
+  bars_since_low: {
+    label: '距低点',
+    value: (m) => (m.barsSinceLow == null ? '-' : `${fmt(m.barsSinceLow, 0)}日/${pct(m.pctAboveLow)}`),
+  },
   flat_base: { label: '平台净变动', value: (m) => pct(m.flatNetChange) },
+  platform_breakout: {
+    label: '突破',
+    value: (m) =>
+      m.breakoutDate === null || m.breakoutDate === undefined
+        ? '-'
+        : `${m.breakoutDate}(${fmt(m.breakoutSurge, 1)}x/${fmt(m.barsSinceBreakout, 0)}日)`,
+  },
+  ma_stabilization: {
+    label: 'MA斜率',
+    value: (m) => (m.maSlope == null ? '-' : `${pct(m.maSlope)}·离MA${pct(m.closeVsMaPct)}`),
+  },
+  volatility_regime: { label: '年化波动', value: (m) => pct(m.annualVol) },
   volume_limit_up: {
     label: '放量涨停',
     value: (m) =>
       m.limitUpDate === null || m.limitUpDate === undefined ? '-' : `${m.limitUpDate}(${fmt(m.limitUpVolumeSurge, 1)}x)`,
   },
+  industry_clearance: {
+    label: '行业出清',
+    value: (m) =>
+      m.industryMedDrawdown == null
+        ? '-'
+        : `${String(m.industry ?? '?')}·中位回撤${pct(m.industryMedDrawdown)}/深跌${pct(m.industryDeepShare)}/${fmt(m.industryMembers, 0)}家`,
+  },
+  market_cap_band: { label: '市值', value: (m) => (m.marketCapYi == null ? '-' : `${fmt(m.marketCapYi, 0)}亿`) },
+  amount_liquidity: { label: '日成交额中位', value: (m) => (m.medianAmountYi == null ? '-' : `${fmt(m.medianAmountYi, 2)}亿`) },
+  turnover_band: { label: '中位换手', value: (m) => (m.medianTurnoverPct == null ? '-' : `${fmt(m.medianTurnoverPct, 2)}%`) },
   cooldown_pullback: {
     label: '回落缩量',
     value: (m) => {

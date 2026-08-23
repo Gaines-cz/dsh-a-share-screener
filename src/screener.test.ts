@@ -274,3 +274,84 @@ describe('runScreen failure modes', () => {
     ).rejects.toThrow(/list host down/)
   })
 })
+
+describe('runScreen (capability gating)', () => {
+  it('refuses loudly when the strategy needs amount data the source lacks', async () => {
+    const dir = await tempDir()
+    const reg = new StrategyRegistry()
+    // Wire an amount-requiring strategy through the real composition engine.
+    const { composeStrategy } = await import('./engine/compose.js')
+    const { createFilterRegistry } = await import('./filters/index.js')
+    reg.register(
+      composeStrategy({
+        id: 'needs-amount',
+        description: 'test',
+        predicate: { kind: 'filter', filter: 'amount_liquidity' },
+        filters: createFilterRegistry(),
+      }),
+    )
+    listStocks.mockResolvedValue([stock('600001', '好公司', 'main', '20100101')])
+    dailyBars.mockResolvedValue(fixtureBars())
+    await expect(
+      runScreen(host, config(dir), dataSource, reg, { strategyId: 'needs-amount', signal: new AbortController().signal }),
+    ).rejects.toThrow(/requires.*traded value.*does not provide/)
+  })
+})
+
+describe('runScreen (industry pre-pass)', () => {
+  it('aggregates industry stats and injects them into the strategy input', async () => {
+    const dir = await tempDir()
+    const { composeStrategy } = await import('./engine/compose.js')
+    const { createFilterRegistry } = await import('./filters/index.js')
+    // deep_drawdown AND industry_clearance: members of a cleared industry hit.
+    const reg = new StrategyRegistry()
+    reg.register(
+      composeStrategy({
+        id: 'industry-test',
+        description: 'test',
+        predicate: {
+          kind: 'and',
+          children: [
+            { kind: 'filter', filter: 'deep_drawdown' },
+            { kind: 'filter', filter: 'industry_clearance' },
+          ],
+        },
+        filters: createFilterRegistry(),
+        extraParamDocs: {
+          minBars: { type: 'number', default: 60, min: 10, max: 3000, integer: true, description: 'x' },
+        },
+      }),
+    )
+    const industrySource: DataSource = {
+      id: 'test-industry',
+      capabilities: { industry: true },
+      listStocks,
+      dailyBars,
+    }
+    listStocks.mockResolvedValue([
+      { ...stock('600001', '深跌甲', 'main', '20100101'), industry: '出清行业' },
+      { ...stock('600002', '深跌乙', 'main', '20100101'), industry: '出清行业' },
+      { ...stock('600004', '深跌丁', 'main', '20100101'), industry: '出清行业' },
+      { ...stock('600003', '浅跌丙', 'main', '20100101'), industry: '景气行业' },
+    ])
+    // 出清行业: two deep members (dd ≥ 0.6); 景气行业: shallow.
+    dailyBars.mockImplementation(async (fullCode: string) => {
+      const bars = fixtureBars() // deep: dd ~0.72
+      if (fullCode.startsWith('600003')) {
+        return bars.map((bar) => ({ ...bar, close: bar.close * 3 + 10, open: bar.open * 3 + 10, high: bar.high * 3 + 10, low: bar.low * 3 + 10 }))
+      }
+      return bars
+    })
+    const result = await runScreen(host, config(dir, { minListDays: 100 }), industrySource, reg, {
+      strategyId: 'industry-test',
+      params: { minIndustryMembers: 3, minIndustryMedDrawdown: 0.5, minIndustryDeepShare: 0.5, minDrawdownFromHigh: 0.6 },
+      signal: new AbortController().signal,
+    })
+    expect(result.matched).toBe(3)
+    const evidence = result.candidates[0]!.evidence as Record<string, unknown>
+    expect(evidence.industry).toBe('出清行业')
+    expect(evidence.industryMembers).toBe(3)
+    expect(evidence.industryMedDrawdown as number).toBeGreaterThan(0.5)
+    expect(result.notes[0]).toMatch(/industry cycle aggregated/)
+  })
+})

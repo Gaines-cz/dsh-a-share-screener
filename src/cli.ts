@@ -22,13 +22,19 @@ import { renderJson, renderMarkdown, tierResults, type ReportContext, type Tiere
 import {
   acquireBarsFile,
   filterByCodes,
+  aggregateIndustries,
+  assertCapabilities,
   historyStartDate,
   prepareUniverse,
   syncBars,
   type ScreenerConfig,
+  type ScreenerHost,
 } from './screener.js'
 import { StrategyRegistry } from './strategies/registry.js'
 import { registerAll } from './strategies/index.js'
+import { toPredicate } from './tool.js'
+import { composeStrategy } from './engine/compose.js'
+import type { IndustryStats } from './engine/types.js'
 import { barsToSeries, fromBarTuple, ymd } from './types.js'
 
 const SOURCE_NOTES: Record<DataSourceId, string> = {
@@ -198,9 +204,33 @@ async function cmdSync(values: Record<string, unknown>): Promise<void> {
 
 async function cmdScan(values: Record<string, unknown>): Promise<void> {
   const config = configFrom(values)
-  const registry = new StrategyRegistry()
+  let registry = new StrategyRegistry()
   registerAll(registry)
-  const strategyId = (values.strategy as string) ?? 'low_flat_limit_up'
+  const predicateRaw = values.predicate as string | undefined
+  const strategyId = predicateRaw !== undefined ? 'custom' : ((values.strategy as string) ?? 'low_flat_limit_up')
+  if (predicateRaw !== undefined) {
+    // Ad-hoc composition over atomic filters (JSON DSL), same as the tool layer.
+    let predicateJson: unknown
+    try {
+      predicateJson = JSON.parse(predicateRaw)
+    } catch (err) {
+      console.error(`--predicate 不是合法 JSON: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(2)
+    }
+    const predicate = toPredicate(predicateJson, createFilterRegistry())
+    const custom = composeStrategy({
+      id: 'custom',
+      description: `Ad-hoc composition: ${predicateRaw}`,
+      predicate,
+      filters: createFilterRegistry(),
+      extraParamDocs: {
+        minBars: { type: 'number', default: 240, min: 60, max: 3000, integer: true, description: 'Minimum bar count to evaluate a stock at all.' },
+      },
+      canEvaluate: (input, params) => input.bars.length >= Math.max(60, params.minBars as number),
+    })
+    registry = new StrategyRegistry()
+    registry.register(custom)
+  }
   const strategy = registry.get(strategyId)
   if (strategy === undefined) {
     console.error(`未知策略 '${strategyId}'. 可用: ${registry.ids().join(', ')}`)
@@ -215,16 +245,29 @@ async function cmdScan(values: Record<string, unknown>): Promise<void> {
     process.exit(2)
   }
   const dataSource = createDataSource(source, limiter)
+  assertCapabilities(strategy, dataSource)
   const { codes, label, slug } = await resolveScope(values, limiter, new AbortController().signal)
   const signal = new AbortController().signal
 
-  const { stocks: filtered, skipped, today } = await prepareUniverse(config, dataSource, signal, values.refresh === true)
+  const { stocks: filtered, skipped, today } = await prepareUniverse(config, dataSource, signal, values.refresh === true, (m) => console.warn(m))
   const universe = filterByCodes(filtered, codes, skipped)
   console.log(`范围 ${label} · 评估前剔除: ${Object.entries(skipped).map(([k, v]) => `${k} ${v}`).join(', ') || '无'}`)
 
   const startDate = historyStartDate(config.historyBars)
   const fetched = new Set<string>()
   const entries: TieredEntry[] = []
+  // Industry strategies need market-level stats before any candidate is judged.
+  let industryByStock: Map<string, IndustryStats> | undefined
+  if (strategy.requires?.industry) {
+    const cliHost: ScreenerHost = { log: (_level, message) => console.log(message) }
+    const stats = await aggregateIndustries(cliHost, config, dataSource, filtered, startDate, today, signal, fetched)
+    industryByStock = new Map()
+    for (const stock of filtered) {
+      const stat = stock.industry === undefined ? undefined : stats.get(stock.industry)
+      if (stat !== undefined) industryByStock.set(stock.code, stat)
+    }
+    console.log(`行业聚合完成: ${stats.size} 个板块`)
+  }
   let unevaluated = 0
   let lastBarDate: string | null = null
   const concurrency = Math.max(1, Math.floor(Number(values.concurrency ?? 12)))
@@ -239,13 +282,13 @@ async function cmdScan(values: Record<string, unknown>): Promise<void> {
         if (tail !== undefined && (lastBarDate === null || tail > lastBarDate)) lastBarDate = tail
         const series = barsToSeries(fileData.bars.map(fromBarTuple))
         if (strategy.diagnose === undefined) {
-          const hit = strategy.screen({ stock, bars: series }, params)
+          const hit = strategy.screen({ stock, bars: series, industryStats: industryByStock?.get(stock.code) }, params)
           if (hit) {
             entries.push({ stock, diagnosis: { matched: true, gates: {}, failedGates: [], metrics: hit.evidence } })
           }
           continue
         }
-        const diag = strategy.diagnose({ stock, bars: series }, params)
+        const diag = strategy.diagnose({ stock, bars: series, industryStats: industryByStock?.get(stock.code) }, params)
         if (diag === null) {
           unevaluated++
           continue
@@ -326,7 +369,7 @@ async function main(): Promise<void> {
       break
     }
     case 'scan': {
-      const { values } = parseArgsSafe(args, { ...commonOptions(), strategy: { type: 'string' }, params: { type: 'string' }, top: { type: 'string' }, out: { type: 'string' } })
+      const { values } = parseArgsSafe(args, { ...commonOptions(), strategy: { type: 'string' }, predicate: { type: 'string' }, params: { type: 'string' }, top: { type: 'string' }, out: { type: 'string' } })
       await cmdScan(values)
       break
     }

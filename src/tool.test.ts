@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createListFiltersTool, createListStrategiesTool, createScreenTool } from './tool.js'
+import { createListFiltersTool, createListStrategiesTool, createScreenTool, toPredicate } from './tool.js'
 import { createFilterRegistry } from './filters/index.js'
 import type { DataSource } from './datasources/index.js'
 import type { ScreenerConfig, ScreenerHost } from './screener.js'
@@ -61,5 +61,127 @@ describe('plugin Config schema', () => {
     expect(resolved.excludeST).toBe(true)
     expect(resolved.excludeBSE).toBe(true)
     expect(resolved.minListDays).toBe(365)
+  })
+})
+
+describe('screen tool result rendering', () => {
+  it('renders non-limit-up strategies with generic evidence columns, not the limit-up table', () => {
+    const screen = createScreenTool(deps)
+    const flatBaseView = {
+      strategy: 'flat_base_low',
+      dataSource: 'sina',
+      generatedAt: '2026-08-23T00:00:00.000Z',
+      scanned: 1,
+      matched: 1,
+      candidates: [
+        {
+          code: '600004',
+          fullCode: '600004.SH',
+          name: '平底股份',
+          board: 'main',
+          strategy: 'flat_base_low',
+          evidence: { percentileInWindow: 0.08, flatNetChange: 0.03, close: 5.5 },
+        },
+      ],
+      skipped: {},
+      stocksFetched: 0,
+      durationMs: 1000,
+      notes: [],
+      disclaimer: 'DISCLAIMER',
+    }
+    const blocks = screen.output!.render!({} as never, flatBaseView) as { type: string; text?: string }[]
+    const text = String(blocks[0] && 'text' in blocks[0] ? blocks[0].text : '')
+    expect(text).toContain('percentileInWindow')
+    expect(text).toContain('flatNetChange')
+    expect(text).not.toContain('limit-up')
+    expect(text).toContain('600004')
+  })
+
+  it('keeps the limit-up table verbatim for low_flat_limit_up', () => {
+    const screen = createScreenTool(deps)
+    const view = {
+      strategy: 'low_flat_limit_up',
+      dataSource: 'sina',
+      generatedAt: '2026-08-23T00:00:00.000Z',
+      scanned: 1,
+      matched: 1,
+      candidates: [
+        {
+          code: '002777',
+          fullCode: '002777.SZ',
+          name: '久远银海',
+          board: 'main',
+          strategy: 'low_flat_limit_up',
+          evidence: {
+            limitUpDate: '20260513',
+            limitUpVolumeSurge: 2.13,
+            cooldownVolumeRatio: 0.3423,
+            cooldownRefDate: '20260513',
+            daysSinceLimitUp: 71,
+            close: 12.51,
+          },
+        },
+      ],
+      skipped: {},
+      stocksFetched: 0,
+      durationMs: 1000,
+      notes: [],
+      disclaimer: 'DISCLAIMER',
+    }
+    const blocks = screen.output!.render!({} as never, view) as { type: string; text?: string }[]
+    const text = String(blocks[0] && 'text' in blocks[0] ? blocks[0].text : '')
+    expect(text).toContain('limit-up   surge   cooldown  cool-ref    days  close')
+    expect(text).toContain('20260513')
+  })
+})
+
+describe('predicate DSL validation', () => {
+  it('converts a nested all/any DSL into an engine predicate', () => {
+    const predicate = toPredicate({ all: ['deep_drawdown', { any: ['platform_breakout', 'volume_limit_up'] }] }, filters)
+    expect(predicate).toEqual({
+      kind: 'and',
+      children: [
+        { kind: 'filter', filter: 'deep_drawdown' },
+        {
+          kind: 'or',
+          children: [
+            { kind: 'filter', filter: 'platform_breakout' },
+            { kind: 'filter', filter: 'volume_limit_up' },
+          ],
+        },
+      ],
+    })
+  })
+
+  it('converts not groups', () => {
+    expect(toPredicate({ not: 'flat_base' }, filters)).toEqual({ kind: 'not', child: { kind: 'filter', filter: 'flat_base' } })
+  })
+
+  it('rejects unknown filter ids with the available list', () => {
+    expect(() => toPredicate('nope', filters)).toThrow(/unknown filter 'nope'/)
+  })
+
+  it('rejects groups with zero or multiple operator keys', () => {
+    expect(() => toPredicate({}, filters)).toThrow('exactly one')
+    expect(() => toPredicate({ all: ['flat_base'], any: ['flat_base'] }, filters)).toThrow('only ONE')
+  })
+
+  it('rejects empty or non-array all/any', () => {
+    expect(() => toPredicate({ all: [] }, filters)).toThrow('non-empty array')
+    expect(() => toPredicate({ any: 'flat_base' }, filters)).toThrow('non-empty array')
+  })
+
+  it('rejects non-string leaves', () => {
+    expect(() => toPredicate({ all: [42] }, filters)).toThrow('filter id')
+  })
+
+  it('rejects nesting deeper than 3 group levels', () => {
+    const deep = { all: [{ all: [{ all: [{ all: ['flat_base'] }] }] }] }
+    expect(() => toPredicate(deep, filters)).toThrow('nest')
+  })
+
+  it('rejects more than 12 leaves', () => {
+    const many = { all: Array.from({ length: 13 }, () => 'flat_base') }
+    expect(() => toPredicate(many, filters)).toThrow('12')
   })
 })

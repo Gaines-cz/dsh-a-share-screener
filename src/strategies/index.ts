@@ -5,6 +5,7 @@
  * @module a-share-screener/strategies
  */
 import { flatBaseLowStrategy } from './flat-base-low.js'
+import { lowFlatBreakoutStrategy } from './low-flat-breakout.js'
 import { lowFlatLimitUpStrategy } from './low-flat-limitup.js'
 import type { StrategyRegistry } from './registry.js'
 
@@ -12,4 +13,5 @@ import type { StrategyRegistry } from './registry.js'
 export function registerAll(registry: StrategyRegistry): void {
   registry.register(lowFlatLimitUpStrategy)
   registry.register(flatBaseLowStrategy)
+  registry.register(lowFlatBreakoutStrategy)
 }

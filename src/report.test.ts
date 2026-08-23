@@ -161,4 +161,81 @@ describe('report rendering', () => {
     expect(md).not.toContain('回落缩量')
     expect(md).not.toContain('✗')
   })
+
+  it('renders the Phase-2 gate cells (industry clearance / market cap / amount liquidity)', () => {
+    const diag2 = diag({
+      gates: { industry_clearance: true, market_cap_band: true, amount_liquidity: false },
+      failedGates: ['amount_liquidity'],
+      metrics: {
+        close: 5,
+        industry: '光伏设备',
+        industryMedDrawdown: 0.5512,
+        industryDeepShare: 0.4,
+        industryMembers: 22,
+        marketCapYi: 85.3,
+        medianAmountYi: 0.084,
+      },
+    })
+    const md = renderMarkdown({
+      ...ctx,
+      strategy: 'custom',
+      tiered: { hits: [], nearMisses: [{ stock: stock('600008', '行业股份'), diagnosis: diag2 }], others: 0 },
+    })
+    expect(md).toContain('行业出清光伏设备·中位回撤55.1%/深跌40.0%/22家✓')
+    expect(md).toContain('市值85亿✓')
+    expect(md).toContain('日成交额中位0.08亿✗')
+    expect(md).toContain('差在: 成交额下限')
+  })
+
+  it('renders the Phase-1 gate cells (breakout / MA / volatility / bars-since-low)', () => {
+    // A low_flat_breakout near-miss: breakout passed, drawdown + MA failed.
+    const breakoutDiag = diag({
+      gates: { deep_drawdown: false, platform_breakout: true, ma_stabilization: false },
+      failedGates: ['deep_drawdown', 'ma_stabilization'],
+      metrics: {
+        close: 12.5,
+        drawdownFromHigh: 0.4,
+        breakoutDate: '20260818',
+        breakoutSurge: 3.2,
+        barsSinceBreakout: 4,
+        baseToClosePct: 0.05,
+        maSlope: 0.012,
+        closeVsMaPct: -0.008,
+        barsAnalyzed: 800,
+      },
+    })
+    const md = renderMarkdown({
+      ...ctx,
+      strategy: 'low_flat_breakout',
+      tiered: { hits: [], nearMisses: [{ stock: stock('600005', '突破股份'), diagnosis: breakoutDiag }], others: 0 },
+    })
+    expect(md).toContain('距高点-40.0%✗')
+    expect(md).toContain('突破20260818(3.2x/4日)✓')
+    expect(md).toContain('MA斜率1.2%·离MA-0.8%✗')
+    expect(md).toContain('差在: 距高点回撤、均线企稳')
+    // A volatility_regime cell renders its annualized percentage.
+    const volDiag = diag({
+      gates: { volatility_regime: true },
+      failedGates: [],
+      metrics: { close: 5, annualVol: 0.3412 },
+    })
+    const volMd = renderMarkdown({
+      ...ctx,
+      strategy: 'x',
+      tiered: { hits: [{ stock: stock('600006', '波动股份'), diagnosis: volDiag }], nearMisses: [], others: 0 },
+    })
+    expect(volMd).toContain('年化波动34.1%✓')
+    // A bars_since_low cell renders days + height-above-low.
+    const lowDiag = diag({
+      gates: { bars_since_low: true },
+      failedGates: [],
+      metrics: { close: 5, barsSinceLow: 109, pctAboveLow: 0.08 },
+    })
+    const lowMd = renderMarkdown({
+      ...ctx,
+      strategy: 'x',
+      tiered: { hits: [{ stock: stock('600007', '磨底股份'), diagnosis: lowDiag }], nearMisses: [], others: 0 },
+    })
+    expect(lowMd).toContain('距低点109日/8.0%✓')
+  })
 })
