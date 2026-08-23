@@ -178,3 +178,18 @@ describe('composeStrategy hit evidence', () => {
     expect(diag!.metrics.bad).toBeNull()
   })
 })
+
+describe('derive index floor (defensive)', () => {
+  it('clamps a corrupt ret <= -1 to a strictly positive chain', async () => {
+    const { derive } = await import('./derive.js')
+    const bad = series(4)
+    bad[1] = { ...bad[1]!, ret: -1.5 } // corrupt: -150% in one bar
+    bad[2] = { ...bad[2]!, ret: 0 }
+    bad[3] = { ...bad[3]!, ret: 0 }
+    const ctx = derive(META, bad)
+    // Every idx value stays > 0, so downstream ratios cannot divide by zero.
+    for (const value of ctx.idx) {
+      expect(value).toBeGreaterThan(0)
+    }
+  })
+})

@@ -8,7 +8,7 @@
  * out blown-off turnover spikes.
  * @module a-share-screener/filters/turnover-band
  */
-import { round } from '../engine/math.js'
+import { median, round } from '../engine/math.js'
 import type { DerivedCtx, Filter, FilterResult } from '../engine/types.js'
 import type { StrategyParams } from '../strategies/registry.js'
 
@@ -68,10 +68,7 @@ export const turnoverBandFilter: Filter = {
       turnovers.push((bar.volume * SHARES_PER_LOT) / floatShares)
     }
     if (turnovers.length === 0) return { passed: false, evidence: { medianTurnoverPct: null } }
-    turnovers.sort((a, b) => a - b)
-    const mid = Math.floor(turnovers.length / 2)
-    const median = turnovers.length % 2 === 1 ? turnovers[mid]! : (turnovers[mid - 1]! + turnovers[mid]!) / 2
-    const medianPct = median * 100
+    const medianPct = median(turnovers) * 100
     const min = params.minTurnoverPct as number
     const max = params.maxTurnoverPct as number
     const passed = medianPct >= min && (max <= 0 || medianPct <= max)

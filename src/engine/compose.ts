@@ -101,7 +101,12 @@ function mergedRequirements(predicate: Predicate, filters: FilterRegistry): Data
     amount = amount || filterReq.amount === true
   }
   if (!industry && !marketCap && !amount) return undefined
-  return { industry: industry || undefined, marketCap: marketCap || undefined, amount: amount || undefined }
+  // Build only the declared flags, never explicit-undefined keys.
+  const req: { industry?: boolean; marketCap?: boolean; amount?: boolean } = {}
+  if (industry) req.industry = true
+  if (marketCap) req.marketCap = true
+  if (amount) req.amount = true
+  return req
 }
 
 /** Drop null-valued evidence entries so hit evidence stays strictly typed. */

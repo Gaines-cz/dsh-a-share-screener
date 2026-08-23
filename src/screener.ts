@@ -14,6 +14,7 @@ import type { DataSource } from './datasources/index.js'
 import { abortError } from './http.js'
 import type { IndustryStats } from './engine/types.js'
 import type { Strategy, StrategyHit, StrategyRegistry } from './strategies/registry.js'
+import { median } from './engine/math.js'
 import { barsToSeries, dateMinusDays, fromBarTuple, toBarTuple, ymd, type BarTuple, type SeriesBar, type StockMeta } from './types.js'
 
 /** Plugin configuration fields the screener consumes. */
@@ -321,7 +322,9 @@ function cycleSummary(series: SeriesBar[]): { dd: number; pos: number } {
   let max = 1
   for (let i = 1; i < series.length; i++) {
     const ret = series[i]!.ret
-    idx[i] = idx[i - 1]! * (1 + (ret === null ? 0 : ret))
+    // Same strictly-positive floor as engine/derive: a corrupt ret <= -1 must
+    // not poison the industry summary's drawdown/percentile ratios.
+    idx[i] = idx[i - 1]! * Math.max(1e-9, 1 + (ret === null ? 0 : ret))
     if (idx[i]! > max) max = idx[i]!
   }
   const current = idx[idx.length - 1]!
@@ -333,12 +336,6 @@ function cycleSummary(series: SeriesBar[]): { dd: number; pos: number } {
   }
   const pos = window > 0 ? below / window : 1
   return { dd, pos }
-}
-
-function median(values: number[]): number {
-  const sorted = [...values].sort((a, b) => a - b)
-  const mid = Math.floor(sorted.length / 2)
-  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2
 }
 
 /**

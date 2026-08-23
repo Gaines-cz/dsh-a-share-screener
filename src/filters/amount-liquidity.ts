@@ -6,7 +6,7 @@
  * (Eastmoney klines carry it; Sina/Tencent do not).
  * @module a-share-screener/filters/amount-liquidity
  */
-import { round } from '../engine/math.js'
+import { median, round } from '../engine/math.js'
 import type { DerivedCtx, Filter, FilterResult } from '../engine/types.js'
 import type { StrategyParams } from '../strategies/registry.js'
 
@@ -46,10 +46,7 @@ export const amountLiquidityFilter: Filter = {
       // gate, or a cache written before amount existed).
       return { passed: false, evidence: { medianAmountYi: null } }
     }
-    amounts.sort((a, b) => a - b)
-    const mid = Math.floor(amounts.length / 2)
-    const median = amounts.length % 2 === 1 ? amounts[mid]! : (amounts[mid - 1]! + amounts[mid]!) / 2
-    const medianYi = median / 1e8
+    const medianYi = median(amounts) / 1e8
     const passed = medianYi >= (params.minMedianAmountYi as number)
     return { passed, evidence: { medianAmountYi: round(medianYi, 3) } }
   },

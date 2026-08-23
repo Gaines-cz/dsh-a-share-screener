@@ -17,7 +17,12 @@ export function derive(stock: StockMeta, bars: SeriesBar[]): DerivedCtx {
   idx[0] = 1
   for (let i = 1; i < bars.length; i++) {
     const ret = bars[i]!.ret
-    idx[i] = idx[i - 1]! * (1 + (ret === null ? 0 : ret))
+    // A single corrupt bar with ret <= -1 would drive the chained index to 0
+    // or negative and poison every downstream ratio (drawdown, percentile,
+    // MA spreads). Clamp to a tiny positive floor: a no-op for any valid
+    // series (daily returns are always > -1 for listed A-shares), but it keeps
+    // the index a strictly positive chain even on bad data.
+    idx[i] = idx[i - 1]! * Math.max(1e-9, 1 + (ret === null ? 0 : ret))
   }
 
   const threshold = limitUpThreshold(stock.board, stock.name)
