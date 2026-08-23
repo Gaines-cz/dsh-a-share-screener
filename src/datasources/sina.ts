@@ -82,7 +82,9 @@ export function createSinaDataSource(limiter: RateLimiter): DataSource {
     return bars.filter((bar) => bar.date >= startDate).sort((a, b) => a.date.localeCompare(b.date))
   }
 
-  return { id: 'sina', capabilities: { industry: false }, listStocks, dailyBars }
+  // The stock list is served by the Eastmoney clist endpoint, so the list-level
+  // capabilities (industry, marketCap) hold; per-bar amount is NOT published.
+  return { id: 'sina', capabilities: { industry: true, marketCap: true, amount: false }, listStocks, dailyBars }
 }
 
 /** Export for tests. */

@@ -66,3 +66,44 @@ describe('eastmoney listStocks pagination', () => {
     expect(stocks[0]!.fullCode).toBe('600519.SH')
   })
 })
+describe('eastmoney list metadata (industry / market caps)', () => {
+  it('populates industry and caps when the clist carries f100/f20/f21', async () => {
+    const diff = [
+      { f12: '600519', f13: 1, f14: '茅台', f26: 20010827, f100: '白酒', f20: 2.1e12, f21: 2.1e12 },
+      { f12: '000001', f13: 0, f14: '平安银行', f26: 19910403, f100: '-', f20: '-', f21: 0 },
+    ]
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { total: 2, diff } }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const stocks = await dataSource.listStocks(new AbortController().signal)
+    expect(stocks[0]).toMatchObject({ industry: '白酒', totalMarketCapYuan: 2.1e12, floatMarketCapYuan: 2.1e12 })
+    // Placeholder industry ('-') and non-finite caps degrade to undefined.
+    expect(stocks[1]!.industry).toBeUndefined()
+    expect(stocks[1]!.totalMarketCapYuan).toBeUndefined()
+    expect(stocks[1]!.floatMarketCapYuan).toBeUndefined()
+  })
+})
+
+describe('eastmoney kline amount', () => {
+  it('parses the traded-value column into Bar.amount', async () => {
+    const kline = { data: { klines: ['2026-08-20,10,10.5,10.6,9.9,1000,1050000000,7.0'] } }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(kline), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const bars = await dataSource.dailyBars('600519.SH', '20200101', new AbortController().signal)
+    expect(bars).toHaveLength(1)
+    expect(bars[0]!.amount).toBe(1_050_000_000)
+  })
+
+  it('tolerates rows without the amount column (null)', async () => {
+    const kline = { data: { klines: ['2026-08-20,10,10.5,10.6,9.9,1000'] } }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(kline), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const bars = await dataSource.dailyBars('600519.SH', '20200101', new AbortController().signal)
+    expect(bars[0]!.amount).toBeNull()
+  })
+})

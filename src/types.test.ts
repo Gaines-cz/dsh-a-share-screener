@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { barsToSeries, boardFromCode, exchangeSuffix, limitUpThreshold, toFullCode, type Bar } from './types.js'
+import { barsToSeries, boardFromCode, exchangeSuffix, fromBarTuple, limitUpThreshold, toBarTuple, toFullCode, type Bar } from './types.js'
 
-function bar(date: string, close: number, preClose: number | null = null, volume = 100): Bar {
-  return { date, open: close, high: close, low: close, close, volume, preClose }
+function bar(date: string, close: number, preClose: number | null = null, volume = 100, amount?: number): Bar {
+  return { date, open: close, high: close, low: close, close, volume, amount: amount ?? null, preClose }
 }
 
 describe('boardFromCode', () => {
@@ -55,5 +55,28 @@ describe('limitUpThreshold', () => {
     expect(limitUpThreshold('bse', '北交所股')).toBe(0.298)
     // Delisting names trade on the 10% main-board band, not the ST band.
     expect(limitUpThreshold('main', '退市未来')).toBe(0.098)
+  })
+})
+
+describe('bar tuples (amount column)', () => {
+  it('round-trips a bar with amount through the 8-column tuple', () => {
+    const bar: Bar = { date: '20260820', open: 10, high: 11, low: 9.5, close: 10.5, volume: 1000, amount: 1.05e9, preClose: 10 }
+    const tuple = toBarTuple(bar)
+    expect(tuple).toHaveLength(8)
+    const back = fromBarTuple(tuple)
+    expect(back.amount).toBe(1.05e9)
+    expect(back.close).toBe(10.5)
+  })
+
+  it('parses legacy 7-column tuples (pre-amount caches) with null amount', () => {
+    const legacy = ['20260820', 10, 11, 9.5, 10.5, 1000, 10] as unknown as ReturnType<typeof toBarTuple>
+    const back = fromBarTuple(legacy)
+    expect(back.amount).toBeNull()
+    expect(back.volume).toBe(1000)
+  })
+
+  it('carries amount through barsToSeries', () => {
+    const series = barsToSeries([bar('20250101', 10, null, 100, 5e8)])
+    expect(series[0]!.amount).toBe(5e8)
   })
 })

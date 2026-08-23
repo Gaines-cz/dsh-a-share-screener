@@ -108,7 +108,9 @@ export function createTencentDataSource(limiter: RateLimiter): DataSource {
     return [...byDate.values()].filter((bar) => bar.date >= startDate).sort((a, b) => a.date.localeCompare(b.date))
   }
 
-  return { id: 'tencent', capabilities: { industry: false }, listStocks, dailyBars }
+  // List-level capabilities come from the shared Eastmoney list; Tencent klines
+  // publish no traded-value column.
+  return { id: 'tencent', capabilities: { industry: true, marketCap: true, amount: false }, listStocks, dailyBars }
 }
 
 /** Export for tests. */
