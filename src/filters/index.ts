@@ -15,6 +15,7 @@ import { lowPercentileFilter } from './low-percentile.js'
 import { maStabilizationFilter } from './ma-stabilization.js'
 import { marketCapBandFilter } from './market-cap-band.js'
 import { platformBreakoutFilter } from './platform-breakout.js'
+import { turnoverBandFilter } from './turnover-band.js'
 import { volatilityRegimeFilter } from './volatility-regime.js'
 import { volumeLimitUpFilter } from './volume-limitup.js'
 
@@ -32,6 +33,7 @@ export function registerAllFilters(registry: FilterRegistry): void {
   registry.register(industryClearanceFilter)
   registry.register(marketCapBandFilter)
   registry.register(amountLiquidityFilter)
+  registry.register(turnoverBandFilter)
 }
 
 /** Build a registry pre-loaded with every shipped filter. */

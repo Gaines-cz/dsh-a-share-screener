@@ -73,6 +73,7 @@ Every strategy is a declarative predicate over reusable atomic filters, combined
 | `industry_clearance` | the industry board itself is in deep clearance (median member drawdown / deep share) | industry (all shipped sources) |
 | `market_cap_band` | total market cap inside [min, max] 亿元 | marketCap (all shipped sources) |
 | `amount_liquidity` | median daily traded value ≥ X 亿元 | amount (eastmoney only) |
+| `turnover_band` | median daily turnover inside [min, max] % | marketCap (all shipped sources) |
 
 Filters that need a capability the active source lacks refuse to run — the scan aborts loudly with the missing capability named instead of silently degrading.
 

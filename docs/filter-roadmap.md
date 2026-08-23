@@ -11,7 +11,8 @@
 - **Phase 3.1 已实现**：`a_share_screen` 支持 `predicate` JSON DSL（all/any/not，≤3 层、≤12 叶，与 strategy 互斥；CLI 等价 `--predicate`）；OR/NOT 树命中证据经 sanitize 去除 null；`a_share_list_filters` 输出每个过滤器的数据要求。
 - **实现期设计修正**：右侧策略去掉了 `low_percentile` 闸门——突破收盘价按构造处于底部区间分布顶端（分位 ≈ 100%），与"最新价分位低"结构性互斥；位置语义由 `deep_drawdown` 承担。`platform_breakout` 自含突破前平台检验，故右侧策略也不叠 `flat_base`（突破后最新窗口必不平）。
 - 顺带修复：`tool.ts` 的扫描结果表原为 limit-up 策略硬编码列，其他策略（如 `flat_base_low`）会渲染成整排 `-`；现改为 limit-up 保持原文、其余策略走通用证据列。
-- **待办**：Phase 3.2 `turnover_band`（f21 流通市值 + amount 均已就绪，只差组合）、Phase 3.3 估值闸门（需独立立项）。
+- **Phase 3.2 已实现**：`turnover_band`（换手率 = 成交量×100 ÷ 流通市值/收盘价，基于 f21 快照，无需逐bar成交额，三个源均可用）。
+- **待办**：Phase 3.3 估值闸门（需独立立项）。
 
 ---
 

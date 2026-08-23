@@ -51,6 +51,7 @@ const GATE_LABELS: Record<string, string> = {
   industry_clearance: '行业出清',
   market_cap_band: '市值区间',
   amount_liquidity: '成交额下限',
+  turnover_band: '换手率区间',
 }
 
 export function gateLabel(gate: string): string {
@@ -118,6 +119,7 @@ const GATE_CELLS: Record<string, GateCell> = {
   },
   market_cap_band: { label: '市值', value: (m) => (m.marketCapYi == null ? '-' : `${fmt(m.marketCapYi, 0)}亿`) },
   amount_liquidity: { label: '日成交额中位', value: (m) => (m.medianAmountYi == null ? '-' : `${fmt(m.medianAmountYi, 2)}亿`) },
+  turnover_band: { label: '中位换手', value: (m) => (m.medianTurnoverPct == null ? '-' : `${fmt(m.medianTurnoverPct, 2)}%`) },
   cooldown_pullback: {
     label: '回落缩量',
     value: (m) => {
