@@ -61,8 +61,11 @@ function screen(
   return lowFlatBreakoutStrategy.screen({ stock: META, bars: seriesFrom(closes, vols) }, params)
 }
 
-function diagnose(closes: number[], vols: number[]) {
-  return lowFlatBreakoutStrategy.diagnose!({ stock: META, bars: seriesFrom(closes, vols) }, DEFAULTS)
+function diagnose(closes: number[], vols: number[], overrides: Partial<Record<string, number | boolean | string>> = {}) {
+  return lowFlatBreakoutStrategy.diagnose!({ stock: META, bars: seriesFrom(closes, vols) }, {
+    ...DEFAULTS,
+    ...overrides,
+  } as StrategyParams)
 }
 
 describe('low_flat_breakout positive case', () => {
@@ -73,6 +76,10 @@ describe('low_flat_breakout positive case', () => {
     const evidence = hit!.evidence as Record<string, number | string>
     expect(hit!.strategy).toBe('low_flat_breakout')
     expect(evidence.drawdownFromHigh as number).toBeGreaterThanOrEqual(0.65)
+    // Near-bottom gate: the fixture's flat base is the window low ~148 bars
+    // back with the breakout close ~6% above it.
+    expect(evidence.barsSinceLow as number).toBeGreaterThanOrEqual(40)
+    expect(evidence.pctAboveLow as number).toBeLessThanOrEqual(0.5)
     expect(evidence.breakoutSurge).toBe(3)
     expect(evidence.barsSinceBreakout).toBe(10)
     expect(evidence.maSlope as number).toBeGreaterThanOrEqual(0)
@@ -119,6 +126,23 @@ describe('low_flat_breakout negative cases', () => {
     expect(diag.gates.ma_stabilization).toBe(true)
   })
 
+  it('rejects a breakout already far above the window low (near-bottom gate)', () => {
+    const { closes, vols } = breakoutBottomFixture()
+    // The fixture sits ~6% above its low; a 3% ceiling isolates the gate so
+    // only bars_since_low fails while every other gate keeps passing.
+    expect(screen(closes, vols, { maxPctAboveLow: 0.03 })).toBeNull()
+    const diag = diagnose(closes, vols, { maxPctAboveLow: 0.03 })!
+    expect(diag.failedGates).toEqual(['bars_since_low'])
+  })
+
+  it('rejects a breakout whose low is too recent (not ground down)', () => {
+    const { closes, vols } = breakoutBottomFixture()
+    // The fixture's low lies ~148 bars back; demanding 200 isolates the gate.
+    expect(screen(closes, vols, { minBarsSinceLow: 200 })).toBeNull()
+    const diag = diagnose(closes, vols, { minBarsSinceLow: 200 })!
+    expect(diag.failedGates).toEqual(['bars_since_low'])
+  })
+
   it('rejects when the breakout falls back into the base', () => {
     const { closes, vols } = breakoutBottomFixture()
     // Round-trip the last bar back below the base high.
@@ -136,12 +160,15 @@ describe('low_flat_breakout registration', () => {
       [
         'baseWindowBars',
         'breakoutWindowBars',
+        'lowLookbackBars',
         'maSlopeBars',
         'maStabWindow',
         'maxBaseGiveback',
         'maxBaseRangeChange',
+        'maxPctAboveLow',
         'minBars',
         'minBarsAfterBreakout',
+        'minBarsSinceLow',
         'minBreakoutMargin',
         'minBreakoutSurge',
         'minDrawdownFromHigh',

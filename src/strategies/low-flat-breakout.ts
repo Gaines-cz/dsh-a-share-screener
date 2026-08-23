@@ -6,8 +6,11 @@
  * holding out of the base since, and the MA stopped falling (right side,
  * warming).
  *
- * Composed from three atomic filters via {@link composeStrategy}: deep_drawdown
- * AND platform_breakout AND ma_stabilization. Two deliberate omissions:
+ * Composed from four atomic filters via {@link composeStrategy}: deep_drawdown
+ * AND platform_breakout AND ma_stabilization AND bars_since_low. The
+ * bars_since_low gate keeps the breakout NEAR THE BOTTOM (window low >= 40
+ * bars back, price at most 50% above it): without it a stock that already
+ * rebounded far off its low still clears a 65%-drawdown gate. Two deliberate omissions:
  * - `low_percentile` — a close above the base high sits ABOVE the entire
  *   bottom-side distribution by construction, so the latest-price percentile
  *   is structurally ~100% after any breakout off the bottom; the position gate
@@ -25,17 +28,19 @@ import type { Strategy, StrategyParams, StrategyScreenInput } from './registry.j
 export const lowFlatBreakoutStrategy: Strategy = composeStrategy({
   id: 'low_flat_breakout',
   description:
-    'Deep low + volume breakout (right-side twin of low_flat_limit_up): the stock sits deep below its window ' +
-    'high (default >= 65% drawdown, on the chained return index), and within the last ~2 weeks a volume-heavy ' +
-    'day (default >= 2x the prior 5-day average) closed at least 2% above the high of the preceding one-month ' +
-    'flat base with the price holding out of the base since, while the MA20 stopped falling and the price sits ' +
-    'at or above it. Unlike low_flat_limit_up there is no latest-price percentile gate: a breakout close above ' +
+    'Deep low + near-bottom volume breakout (right-side twin of low_flat_limit_up): the stock sits deep below its ' +
+    'window high (default >= 65% drawdown, on the chained return index) while staying near its window low ' +
+    '(default low >= 40 bars back, price at most 50% above it), and within the last ~2 weeks a volume-heavy day ' +
+    '(default >= 2x the prior 5-day average) closed at least 2% above the high of the preceding one-month flat ' +
+    'base with the price holding out of the base since (default >= 2 confirming closes), while the MA20 stopped ' +
+    'falling and the price sits at or above it. Unlike low_flat_limit_up there is no latest-price percentile gate: a breakout close above ' +
     'the base high sits at the top of the bottom-side distribution by construction. Read the evidence fields ' +
     'as quantified facts, not trading signals.',
   predicate: {
     kind: 'and',
     children: [
       { kind: 'filter', filter: 'deep_drawdown' },
+      { kind: 'filter', filter: 'bars_since_low' },
       { kind: 'filter', filter: 'platform_breakout' },
       { kind: 'filter', filter: 'ma_stabilization' },
     ],

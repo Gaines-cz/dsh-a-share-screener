@@ -24,19 +24,18 @@ function params(overrides: Partial<StrategyParams> = {}): StrategyParams {
     maxBaseRangeChange: 0.08,
     minBreakoutMargin: 0.02,
     minBreakoutSurge: 2,
-    minBarsAfterBreakout: 1,
+    minBarsAfterBreakout: 2,
     maxBaseGiveback: 0,
     ...overrides,
   }
 }
 
 /**
- * Textbook shape: flat base (0..29), volume breakout +6% on bar 30, held flat
- * above the base high through bar 39. Defaults expect the breakout within the
- * last 10 bars of a 40-bar series: last=39, latestAllowed=38 — so the fixture
- * puts the breakout at bar 38 by default via the `at` override helper.
+ * Textbook shape: flat base, volume breakout +6% on bar 37, held flat above
+ * the base high through bar 39. Under the default minBarsAfterBreakout = 2
+ * the breakout must be at least 2 bars back: last=39, latestAllowed=37.
  */
-function breakoutFixture(at = 38, total = 40): SeriesBar[] {
+function breakoutFixture(at = 37, total = 40): SeriesBar[] {
   const overrides: Record<number, { ret?: number; volume?: number }> = {}
   overrides[at] = { ret: 0.06, volume: 3000 }
   for (let i = at + 1; i < total; i++) overrides[i] = { ret: 0 }
@@ -48,9 +47,9 @@ describe('platform_breakout', () => {
     const bars = breakoutFixture()
     const result = platformBreakoutFilter.apply(derive(META, bars), params())
     expect(result.passed).toBe(true)
-    expect(result.evidence.breakoutDate).toBe(bars[38]!.date)
+    expect(result.evidence.breakoutDate).toBe(bars[37]!.date)
     expect(result.evidence.breakoutSurge).toBe(3)
-    expect(result.evidence.barsSinceBreakout).toBe(1)
+    expect(result.evidence.barsSinceBreakout).toBe(2)
     expect(result.evidence.baseToClosePct as number).toBeGreaterThan(0.02)
   })
 
@@ -78,7 +77,7 @@ describe('platform_breakout', () => {
 
   it('fails when the breakout volume does not surge', () => {
     const bars = breakoutFixture()
-    bars[38] = { ...bars[38]!, volume: 1200 } // 1.2x < 2x
+    bars[37] = { ...bars[37]!, volume: 1200 } // 1.2x < 2x
     const result = platformBreakoutFilter.apply(derive(META, bars), params())
     expect(result.passed).toBe(false)
   })
@@ -94,24 +93,35 @@ describe('platform_breakout', () => {
   })
 
   it('cites the most recent qualifying day when two breakouts exist', () => {
-    // Breakout at 30 and another at 38; the evidence must cite 38.
+    // Breakout at 31 and another at 37; the evidence must cite 37.
     const overrides: Record<number, { ret?: number; volume?: number }> = {}
-    overrides[30] = { ret: 0.06, volume: 3000 }
-    overrides[38] = { ret: 0.06, volume: 2500 }
-    overrides[39] = { ret: 0 }
+    overrides[31] = { ret: 0.06, volume: 3000 }
+    overrides[37] = { ret: 0.06, volume: 2500 }
     const bars = series(40, overrides)
     const result = platformBreakoutFilter.apply(derive(META, bars), params())
     expect(result.passed).toBe(true)
-    expect(result.evidence.breakoutDate).toBe(bars[38]!.date)
+    expect(result.evidence.breakoutDate).toBe(bars[37]!.date)
+  })
+
+  it('accepts a one-bar-old breakout when minBarsAfterBreakout is overridden to 1', () => {
+    // Default 2 excludes yesterday's breakout; the override re-admits it.
+    const bars = breakoutFixture(38)
+    const strict = platformBreakoutFilter.apply(derive(META, bars), params())
+    expect(strict.passed).toBe(false)
+    const lax = platformBreakoutFilter.apply(
+      derive(META, bars),
+      params({ minBarsAfterBreakout: 1 }),
+    )
+    expect(lax.passed).toBe(true)
+    expect(lax.evidence.barsSinceBreakout).toBe(1)
   })
 
   it('does not treat a zero-volume prior as an infinite surge (suspended/resumed name)', () => {
     // Flat base with ZERO volume on the 5 bars before the breakout day: the
     // surge must read 0 (not Infinity), so the breakout fails the volume gate.
     const overrides: Record<number, { ret?: number; volume?: number }> = {}
-    for (let i = 33; i <= 37; i++) overrides[i] = { volume: 0 }
-    overrides[38] = { ret: 0.06, volume: 3000 }
-    overrides[39] = { ret: 0 }
+    for (let i = 32; i <= 36; i++) overrides[i] = { volume: 0 }
+    overrides[37] = { ret: 0.06, volume: 3000 }
     const result = platformBreakoutFilter.apply(derive(META, series(40, overrides)), params())
     expect(result.passed).toBe(false)
     expect(result.evidence.breakoutDate).toBeNull()
