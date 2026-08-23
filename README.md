@@ -45,7 +45,7 @@ The first full scan downloads history into a local disk cache and can take many 
 
 ### `low_flat_breakout`
 
-"Deep low + volume breakout" — the right-side twin of `low_flat_limit_up`: deep below the window high (default ≥ 65% drawdown), a volume-heavy day (≥ 2× the prior 5-day average) recently closed ≥ 2% above the high of the preceding one-month flat base with the price holding out of the base since, and the MA20 stopped falling with price at or above it. Deliberately no `low_percentile` gate: a breakout close above the base high sits at the top of the bottom-side distribution by construction.
+"Deep low + near-bottom volume breakout" — the right-side twin of `low_flat_limit_up`: deep below the window high (default ≥ 65% drawdown) while staying near the window low (low ≥ 40 bars back, price ≤ 50% above it), a volume-heavy day (≥ 2× the prior 5-day average) closed ≥ 2% above the high of the preceding one-month flat base with the price holding out of the base since (default ≥ 2 confirming closes), and the MA20 stopped falling with price at or above it. Deliberately no `low_percentile` gate: a breakout close above the base high sits at the top of the bottom-side distribution by construction.
 
 ### `low_flat_limit_up`
 
@@ -57,7 +57,7 @@ All strategies are compositions of the atomic filters below.
 
 ## Atomic filters & composition
 
-Every strategy is a declarative predicate over reusable atomic filters, combined with AND / OR / NOT into an expression tree. Thirteen filters ship today (`a_share_list_filters` lists them with their parameters):
+Every strategy is a declarative predicate over reusable atomic filters, combined with AND / OR / NOT into an expression tree. Fifteen filters ship today (`a_share_list_filters` lists them with their parameters):
 
 | Filter | Gate | Needs |
 |---|---|---|
@@ -70,7 +70,9 @@ Every strategy is a declarative predicate over reusable atomic filters, combined
 | `volatility_regime` | annualized realized volatility inside [min, max] | — |
 | `volume_limit_up` | a volume-heavy limit-up day exists in the window | — |
 | `cooldown_pullback` | price pulled back below that close and volume cooled off | — |
+| `volume_dry_up` | absolute volume drought: recent average ≤ X% of the preceding baseline | — |
 | `industry_clearance` | the industry board itself is in deep clearance (median member drawdown / deep share) | industry (all shipped sources) |
+| `industry_position` | the industry board sits low in its own range (median member window percentile) | industry (all shipped sources) |
 | `market_cap_band` | total market cap inside [min, max] 亿元 | marketCap (all shipped sources) |
 | `amount_liquidity` | median daily traded value ≥ X 亿元 | amount (eastmoney only) |
 | `turnover_band` | median daily turnover inside [min, max] % | marketCap (all shipped sources) |

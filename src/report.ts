@@ -48,7 +48,9 @@ const GATE_LABELS: Record<string, string> = {
   volatility_regime: '波动率区间',
   volume_limit_up: '放量涨停',
   cooldown_pullback: '涨停后回落缩量',
+  volume_dry_up: '地量',
   industry_clearance: '行业出清',
+  industry_position: '行业位置',
   market_cap_band: '市值区间',
   amount_liquidity: '成交额下限',
   turnover_band: '换手率区间',
@@ -109,6 +111,14 @@ const GATE_CELLS: Record<string, GateCell> = {
     label: '放量涨停',
     value: (m) =>
       m.limitUpDate === null || m.limitUpDate === undefined ? '-' : `${m.limitUpDate}(${fmt(m.limitUpVolumeSurge, 1)}x)`,
+  },
+  volume_dry_up: { label: '地量', value: (m) => (m.dryUpVolumeRatio == null ? '-' : `${pct(m.dryUpVolumeRatio)}`) },
+  industry_position: {
+    label: '行业位置',
+    value: (m) =>
+      m.industryMedPos == null
+        ? '-'
+        : `${String(m.industry ?? '?')}·中位分位${pct(m.industryMedPos)}/${fmt(m.industryMembers, 0)}家`,
   },
   industry_clearance: {
     label: '行业出清',

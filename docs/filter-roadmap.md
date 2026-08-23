@@ -13,6 +13,7 @@
 - 顺带修复：`tool.ts` 的扫描结果表原为 limit-up 策略硬编码列，其他策略（如 `flat_base_low`）会渲染成整排 `-`；现改为 limit-up 保持原文、其余策略走通用证据列。
 - **Phase 3.2 已实现**：`turnover_band`（换手率 = 成交量×100 ÷ 流通市值/收盘价，基于 f21 快照，无需逐bar成交额，三个源均可用）。
 - **待办**：Phase 3.3 估值闸门（需独立立项）。
+- **2026-08-23 晚（feat/filter-refinement-260823）**：实测暴露 low_flat_breakout 缺底部距离约束（9 只命中里 7 只离底太远）→ 策略加入 `bars_since_low`；`platform_breakout` 的 `minBarsAfterBreakout` 默认 1→2（≥1 根确认K线）；新增 `industry_position`（消费已聚合的 medPos，行业"跌得深"与"位置低"分离）与 `volume_dry_up`（地量，与 cooldown_pullback 相对/绝对互补）；两个行业过滤器共享参数表抽到 `industry-shared.ts`（仿 limitup-search 先例）。下一批：DSL per-leaf 参数、周线重采样、Hit Journal。
 
 ---
 
