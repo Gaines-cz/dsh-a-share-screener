@@ -354,4 +354,64 @@ describe('runScreen (industry pre-pass)', () => {
     expect(evidence.industryMedDrawdown as number).toBeGreaterThan(0.5)
     expect(result.notes[0]).toMatch(/industry cycle aggregated/)
   })
+
+  it('warns visibly when the pre-pass fetch fails systemically, while the main loop retries clean', async () => {
+    const dir = await tempDir()
+    const logs: string[] = []
+    const loggingHost: ScreenerHost = { log: (_level, message) => logs.push(message) }
+    const { composeStrategy } = await import('./engine/compose.js')
+    const { createFilterRegistry } = await import('./filters/index.js')
+    const reg = new StrategyRegistry()
+    reg.register(
+      composeStrategy({
+        id: 'industry-test',
+        description: 'test',
+        predicate: {
+          kind: 'and',
+          children: [
+            { kind: 'filter', filter: 'deep_drawdown' },
+            { kind: 'filter', filter: 'industry_clearance' },
+          ],
+        },
+        filters: createFilterRegistry(),
+        extraParamDocs: {
+          minBars: { type: 'number', default: 60, min: 10, max: 3000, integer: true, description: 'x' },
+        },
+      }),
+    )
+    const industrySource: DataSource = {
+      id: 'test-industry',
+      capabilities: { industry: true },
+      listStocks,
+      dailyBars,
+    }
+    // 12 members so 12 failures exceed the systemic threshold max(10, 10%).
+    listStocks.mockResolvedValue(
+      Array.from({ length: 12 }, (_, i) => ({
+        ...stock(`6000${String(i + 10)}`, `成员${i}`, 'main', '20100101'),
+        industry: '出清行业',
+      })),
+    )
+    // First fetch of every code fails (the whole pre-pass); the retry succeeds.
+    const calls = new Map<string, number>()
+    dailyBars.mockImplementation(async (fullCode: string) => {
+      const n = (calls.get(fullCode) ?? 0) + 1
+      calls.set(fullCode, n)
+      if (n === 1) throw new Error('transient outage')
+      return fixtureBars()
+    })
+    const result = await runScreen(loggingHost, config(dir, { minListDays: 100 }), industrySource, reg, {
+      strategyId: 'industry-test',
+      params: { minIndustryMembers: 3, minIndustryMedDrawdown: 0.5, minIndustryDeepShare: 0.5, minDrawdownFromHigh: 0.6 },
+      signal: new AbortController().signal,
+    })
+    // The pre-pass failed for all 12 → empty industry stats → no candidate passes industry_clearance,
+    // but the run itself must NOT abort: the main loop retried every member cleanly.
+    expect(result.matched).toBe(0)
+    expect(result.skipped['kline-fetch-failed'] ?? 0).toBe(0)
+    expect(
+      logs.some((m) => m.includes('industry pre-pass') && m.includes('12/12')),
+    ).toBe(true)
+    expect(logs.some((m) => m.includes('12 fetch failures'))).toBe(true)
+  })
 })

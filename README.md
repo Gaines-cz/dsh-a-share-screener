@@ -57,7 +57,7 @@ All strategies are compositions of the atomic filters below.
 
 ## Atomic filters & composition
 
-Every strategy is a declarative predicate over reusable atomic filters, combined with AND / OR / NOT into an expression tree. Nine filters ship today (`a_share_list_filters` lists them with their parameters):
+Every strategy is a declarative predicate over reusable atomic filters, combined with AND / OR / NOT into an expression tree. Thirteen filters ship today (`a_share_list_filters` lists them with their parameters):
 
 | Filter | Gate | Needs |
 |---|---|---|
@@ -187,7 +187,7 @@ Common options: `--source sina|eastmoney|tencent`, `--board <name>` (e.g. `--boa
 ## Limitations
 
 - The free endpoints (Sina / Eastmoney / Tencent) are public but undocumented; field drift fails loudly rather than silently, and Eastmoney's clist host fails over realtime → delayed so one blocked host does not kill a scan.
-- Free sources do not classify industries (`capabilities.industry` is false); sector screening works through the Eastmoney industry/concept board-member endpoint (`--board`).
+- Industry classification is Eastmoney's own taxonomy (`f100` on the shared stock list — all shipped sources expose it via `capabilities.industry`), not the SW (申万) L1/L2 scheme; `industry_clearance` aggregates on it. Separately, `--board` screening uses the Eastmoney industry/concept board-member endpoint.
 - ST filtering uses the current stock name (no historical name-change tracking).
 - Everything runs in the local process; no data leaves your machine except API calls to the data source.
 
