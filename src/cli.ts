@@ -457,6 +457,7 @@ async function cmdBacktest(values: Record<string, unknown>): Promise<void> {
     scope: label,
     concurrency: Math.max(1, Math.floor(Number(values.concurrency ?? 12))),
     universeSkipped: skipped,
+    signal,
   })
 
   const failures = result.skipped['kline-fetch-failed'] ?? 0

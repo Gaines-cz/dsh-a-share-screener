@@ -19,6 +19,7 @@
  * as return forecasts. @module a-share-screener/backtest
  */
 import type { Strategy, StrategyHit, StrategyParams } from './strategies/registry.js'
+import { abortError } from './http.js'
 import type { Board, SeriesBar, StockMeta } from './types.js'
 
 export const BACKTEST_DISCLAIMER =
@@ -279,6 +280,14 @@ export interface BacktestArgs {
   concurrency?: number
   /** Universe-level exclusion counts (ST / listing-age / code whitelist) surfaced in the report's 剔除 line, mirroring the scan reports. */
   universeSkipped?: Record<string, number>
+  /**
+   * Cooperative abort: workers stop draining the queue once aborted instead
+   * of miscounting the abort as a kline-fetch-failure (mirrors sync/scan;
+   * the acquire callback's own signal check is the backstop). The CLI's
+   * controller is currently never aborted — same defensive pattern as the
+   * scan/sync commands, kept so SIGINT wiring has a place to plug in.
+   */
+  signal?: AbortSignal
 }
 
 function horizonStat(
@@ -391,6 +400,9 @@ export async function runBacktest(args: BacktestArgs): Promise<BacktestResult> {
     for (;;) {
       const stock = queue.shift()
       if (stock === undefined) return
+      // Mirror syncBars/scan: a worker must stop draining the queue once
+      // aborted, instead of miscounting the abort as kline-fetch-failed.
+      if (args.signal?.aborted) throw abortError()
       await evaluateStock(stock)
     }
   }

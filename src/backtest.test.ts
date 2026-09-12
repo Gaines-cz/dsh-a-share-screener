@@ -370,6 +370,29 @@ describe('runBacktest', () => {
     expect(result.stocksEvaluated).toBe(1)
   })
 
+  it('stops workers on an aborted signal instead of miscounting fetch failures', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    let calls = 0
+    await expect(
+      runBacktest({
+        strategy: ddStrategy,
+        params: DD_PARAMS,
+        stocks: [hitStock, flatStock],
+        asOfDates: [dateAt(250)],
+        horizons: [5],
+        signal: controller.signal,
+        acquireBars: async () => {
+          calls++
+          return deepDrawdownBars()
+        },
+      }),
+    ).rejects.toThrow(/aborted/)
+    // The top-of-loop guard fires before any acquire attempt: no fetch, no
+    // kline-fetch-failed miscount.
+    expect(calls).toBe(0)
+  })
+
   it('refuses industry/market-cap strategies and bad date/horizon inputs', async () => {
     await expect(
       runBacktest({
