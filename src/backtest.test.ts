@@ -17,8 +17,9 @@ import {
 } from './backtest.js'
 import { composeStrategy } from './engine/compose.js'
 import { createFilterRegistry } from './filters/index.js'
+import { historyStartDate } from './screener.js'
 import type { Strategy, StrategyParams } from './strategies/registry.js'
-import type { SeriesBar, StockMeta } from './types.js'
+import { dateMinusDays, ymd, type SeriesBar, type StockMeta } from './types.js'
 
 /** Calendar date i days after 2025-01-01, UTC-formatted YYYYMMDD. */
 function dateAt(i: number): string {
@@ -114,6 +115,30 @@ describe('parseHorizons', () => {
     expect(historyBarsForBacktest(800, '20260912', '20260912')).toBe(800 + 10)
     // A future anchor (silly input) must not shrink the window.
     expect(historyBarsForBacktest(800, '20270912', '20260912')).toBe(810)
+  })
+
+  it('end-to-end: the widened window really leaves >= requestedBars trading bars below the oldest as-of', () => {
+    // Pessimistic calendar: weekdays minus every 12th weekday ≈ 239 trading
+    // days/year — worse than the ~243 A-share average the 1.5x factor
+    // assumes, so holiday-dense spans cannot silently break the guarantee.
+    const tradingDaysBetween = (fromYmd: string, toYmdStr: string): number => {
+      const days: string[] = []
+      let cursor = fromYmd
+      while (cursor < toYmdStr) {
+        const dow = new Date(Date.UTC(+cursor.slice(0, 4), +cursor.slice(4, 6) - 1, +cursor.slice(6, 8))).getUTCDay()
+        if (dow !== 0 && dow !== 6) days.push(cursor)
+        cursor = dateMinusDays(cursor, -1)
+      }
+      return days.filter((_, i) => i % 12 !== 11).length
+    }
+    const today = ymd(new Date())
+    for (const requestedBars of [250, 800]) {
+      for (const daysBack of [90, 365, 730]) {
+        const oldestAsOf = dateMinusDays(today, daysBack)
+        const startDate = historyStartDate(historyBarsForBacktest(requestedBars, oldestAsOf, today))
+        expect(tradingDaysBetween(startDate, oldestAsOf)).toBeGreaterThanOrEqual(requestedBars)
+      }
+    }
   })
 })
 
@@ -237,14 +262,80 @@ describe('runBacktest', () => {
       }
       expect(r.horizons.every((stat) => stat.observations === 1)).toBe(true)
     }
-    // Pooled: 2 dates × 1 hit each, horizons kept separate.
+    // Pooled: 2 dates × 1 hit each, horizons kept separate; the pooled baseline
+    // pools the SAME (stock × date) observations flat, so hit/baseline medians
+    // aggregate at the same level (like-for-like excess).
     expect(result.pooled.map((p) => [p.horizon, p.observations])).toEqual([
       [5, 2],
       [20, 2],
     ])
+    for (const stat of result.pooled) {
+      const flat: number[] = []
+      for (const bars of [hitBars, flatBars, upBars]) {
+        for (const asOfIdx of [250, 280]) {
+          const fr = forwardReturn(chainedIndex(bars), asOfIdx, stat.horizon)
+          if (fr !== null) flat.push(fr)
+        }
+      }
+      expect(stat.baselineMedian).toBeCloseTo(medianOf(flat)!, 12)
+      expect(stat.excessMedian).toBeCloseTo(stat.hitMedian! - stat.baselineMedian!, 12)
+    }
     expect(result.stocksEvaluated).toBe(3)
     expect(result.skipped).toEqual({})
     expect(result.notes.join(' ')).toContain('correlated observations')
+  })
+
+  it('seeds universe-level exclusions into the report and never overwrites fetch failures', async () => {
+    const result = await runBacktest({
+      strategy: ddStrategy,
+      params: DD_PARAMS,
+      stocks: [hitStock],
+      asOfDates: [dateAt(250)],
+      horizons: [5],
+      acquireBars: async () => deepDrawdownBars(),
+      universeSkipped: { 'st-or-delisting': 478, bse: 344 },
+    })
+    expect(result.skipped).toEqual({ 'st-or-delisting': 478, bse: 344 })
+    const withFailure = await runBacktest({
+      strategy: ddStrategy,
+      params: DD_PARAMS,
+      stocks: [hitStock, flatStock],
+      asOfDates: [dateAt(250)],
+      horizons: [5],
+      acquireBars: async (stock) => (stock.code === '600002' ? null : deepDrawdownBars()),
+      universeSkipped: { 'st-or-delisting': 478 },
+    })
+    expect(withFailure.skipped).toEqual({ 'st-or-delisting': 478, 'kline-fetch-failed': 1 })
+  })
+
+  it('produces identical results regardless of acquisition concurrency', async () => {
+    const byCode = new Map<string, SeriesBar[]>([
+      ['600001', deepDrawdownBars()],
+      ['600002', series(Array.from({ length: 320 }, () => 0))],
+      ['600003', series(Array.from({ length: 320 }, () => 0.005))],
+    ])
+    const run = async (concurrency: number): Promise<BacktestResult> =>
+      runBacktest({
+        strategy: ddStrategy,
+        params: DD_PARAMS,
+        stocks: [hitStock, flatStock, upStock],
+        asOfDates: [dateAt(250), dateAt(280)],
+        horizons: [5, 20],
+        concurrency,
+        // A microtask hop per acquire so workers actually interleave.
+        acquireBars: async (stock) => {
+          await Promise.resolve()
+          return byCode.get(stock.code)!
+        },
+      })
+    const serial = await run(1)
+    const concurrent = await run(4)
+    const strip = (r: BacktestResult): unknown => {
+      const { generatedAt, ...rest } = r
+      void generatedAt
+      return rest
+    }
+    expect(strip(concurrent)).toEqual(strip(serial))
   })
 
   it('excludes stocks not yet listed (or too young) at an as-of date', async () => {
@@ -352,10 +443,16 @@ describe('renderBacktestMarkdown', () => {
     expect(md).toContain('幸存者偏差')
     expect(md).toContain('| 时点 | 实际数据日 | 可评估 | 命中 | 窗口 |')
     expect(md).toContain('| 窗口 | 观测数 | 命中中位 |')
+    expect(md).toContain('基准中位(合并口径)')
     expect(md).toContain('## 三、命中明细 (2 行)')
     expect(md).toContain(dateAt(250))
+    expect(md).toContain('| 时点 | 实际数据日 | 代码 | 名称 | 板块 | 时点收盘 |')
     expect(md).toContain('| 5日 | 20日 |')
     expect(md).toContain('不构成投资建议')
+    // The canonical disclaimer (shared with the JSON payload) is rendered in
+    // full so the two artifacts cannot drift apart.
+    expect(md).toContain(result.disclaimer)
+    expect(md).toContain('survivorship bias')
   })
 
   it('caps detail rows and says so', async () => {

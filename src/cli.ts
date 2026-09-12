@@ -181,7 +181,7 @@ function printHelp(): void {
   --board <板块名>                   只扫东财板块成分 (如 核能核电 / 农林牧渔)
   --strategy <id>                    扫描策略 (默认 low_flat_limit_up)
   --params k=v,k2=v2                 覆盖策略参数
-  --top <n>                          近邻候选最多列 n 只 (默认 30; 回测明细默认 200)
+  --top <n>                          近邻候选最多列 n 只 (默认 30, 仅 scan)
   --out <dir>                        报告输出目录 (默认 reports/)
   --cache-dir <dir>                  缓存目录 (默认 ~/.dsh/a-share-screener)
   --refresh                          强制刷新股票清单与K线
@@ -194,6 +194,8 @@ function printHelp(): void {
   --as-of <YYYYMMDD>                 锚点时点 (默认今天), 向前每月一步
   --months <n>                       时点数 (默认 12)
   --horizons <a,b,c>                 前瞻窗口交易日数 (默认 5,20,60)
+  --detail-rows <n>                  命中明细最多列 n 行 (默认 200)
+  --concurrency 对 backtest 同样生效 (并发拉取K线; 逐股评估本身同步、结果确定性不受并发影响)
   回测前先 pnpm sync; K线窗口会自动加宽保证最老时点下方历史完整 (首次触发回填);
   需要行业聚合或市值快照的策略会被拒绝 (避免未来数据泄漏)`
 )
@@ -427,7 +429,8 @@ async function cmdBacktest(values: Record<string, unknown>): Promise<void> {
 
   const { stocks: filtered, skipped, today } = await prepareUniverse(config, dataSource, signal, values.refresh === true, (m) => console.warn(m))
   const universe = filterByCodes(filtered, codes, skipped)
-  console.log(`范围 ${label} · 时点 ${asOfDates.length} 个 (${asOfDates[0]} → ${asOfDates[asOfDates.length - 1]}) · 前瞻窗口 ${horizons.join('/')} 交易日`)
+  console.log(`范围 ${label} · 评估前剔除: ${Object.entries(skipped).map(([k, v]) => `${k} ${v}`).join(', ') || '无'}`)
+  console.log(`时点 ${asOfDates.length} 个 (${asOfDates[0]} → ${asOfDates[asOfDates.length - 1]}) · 前瞻窗口 ${horizons.join('/')} 交易日`)
 
   const startDate = historyStartDate(config.historyBars)
   const fetched = new Set<string>()
@@ -452,6 +455,8 @@ async function cmdBacktest(values: Record<string, unknown>): Promise<void> {
     log: (message) => console.log(`[a-share-screener] ${message}`),
     source: dataSource.id,
     scope: label,
+    concurrency: Math.max(1, Math.floor(Number(values.concurrency ?? 12))),
+    universeSkipped: skipped,
   })
 
   const failures = result.skipped['kline-fetch-failed'] ?? 0
@@ -462,8 +467,8 @@ async function cmdBacktest(values: Record<string, unknown>): Promise<void> {
   const outDir = (values.out as string | undefined) ?? 'reports'
   await mkdir(outDir, { recursive: true })
   const base = `${ymd(new Date())}-backtest-${strategyId}-${slug}`
-  const top = Math.max(1, Math.floor(Number(values.top ?? 200)))
-  await writeFile(join(outDir, `${base}.md`), renderBacktestMarkdown(result, top), 'utf8')
+  const detailRows = Math.max(1, Math.floor(Number(values['detail-rows'] ?? 200)))
+  await writeFile(join(outDir, `${base}.md`), renderBacktestMarkdown(result, detailRows), 'utf8')
   await writeFile(join(outDir, `${base}.json`), JSON.stringify(result, null, 2), 'utf8')
 
   console.log(`回测完成: ${label} · 数据源 ${dataSource.id} · 股票 ${result.stocksEvaluated} 只 · 命中观测 ${result.asOfResults.reduce((s, r) => s + r.hits.length, 0)}`)
@@ -494,7 +499,7 @@ async function main(): Promise<void> {
         strategy: { type: 'string' },
         predicate: { type: 'string' },
         params: { type: 'string' },
-        top: { type: 'string' },
+        'detail-rows': { type: 'string' },
         out: { type: 'string' },
         'as-of': { type: 'string' },
         months: { type: 'string' },

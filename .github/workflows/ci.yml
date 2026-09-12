@@ -24,3 +24,7 @@ jobs:
       - run: pnpm run typecheck
       - run: pnpm test
       - run: pnpm run build
+      # lib/ is a committed build artifact (immutable installs without build
+      # scripts); fail the PR when it drifts from a fresh build of src/.
+      - name: lib must match a fresh build
+        run: git diff --exit-code -- lib/ || (echo "::error::committed lib/ differs from a fresh build of src/ — run pnpm build and commit the artifact"; exit 1)

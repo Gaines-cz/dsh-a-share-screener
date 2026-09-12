@@ -102,14 +102,21 @@ export function historyBarsForBacktest(requestedBars: number, oldestAsOf: string
   return requestedBars + Math.ceil(daysBack / 1.5) + 10
 }
 
-/** Index of the last bar with date ≤ asOf; -1 when the stock had not listed yet. */
+/** Index of the last bar with date ≤ asOf; -1 when the stock had not listed yet. Binary search — bars are ascending by date, and the full-market backtest calls this once per (stock × as-of date). */
 export function asOfIndex(bars: SeriesBar[], asOf: string): number {
-  let i = -1
-  for (let k = 0; k < bars.length; k++) {
-    if (bars[k]!.date <= asOf) i = k
-    else break
+  let lo = 0
+  let hi = bars.length - 1
+  let ans = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (bars[mid]!.date <= asOf) {
+      ans = mid
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
   }
-  return i
+  return ans
 }
 
 /**
@@ -268,6 +275,10 @@ export interface BacktestArgs {
   /** Data-source id and scope label for the report header (cosmetic). */
   source?: string
   scope?: string
+  /** Worker-pool size for bar ACQUISITION only (default 1); evaluation itself is synchronous per stock, so results are deterministic regardless of concurrency. */
+  concurrency?: number
+  /** Universe-level exclusion counts (ST / listing-age / code whitelist) surfaced in the report's 剔除 line, mirroring the scan reports. */
+  universeSkipped?: Record<string, number>
 }
 
 function horizonStat(
@@ -292,9 +303,11 @@ function horizonStat(
 }
 
 /**
- * Run the as-of evaluation loop. Serial by design: backtests assume a warm
- * cache (`pnpm sync` first) and stay trivially reproducible; the CLI mirrors
- * the scan commands' systemic-failure guard on top of the skipped counts.
+ * Run the as-of evaluation loop. Bar acquisition runs through a bounded worker
+ * pool (`concurrency`, mirroring sync/scan); per-stock evaluation is
+ * synchronous, and every (date × stock) observation is independent, so the
+ * only ordering effect of concurrency is hit insertion order — normalized by
+ * sorting each date's hits by code before the result is built.
  */
 export async function runBacktest(args: BacktestArgs): Promise<BacktestResult> {
   const { strategy, params, stocks, asOfDates, horizons, acquireBars } = args
@@ -318,21 +331,24 @@ export async function runBacktest(args: BacktestArgs): Promise<BacktestResult> {
   const baseline = new Map<string, Map<number, number[]>>(asOfDates.map((d) => [d, new Map(horizons.map((h) => [h, [] as number[]]))]))
   const evaluable = new Map<string, number>(asOfDates.map((d) => [d, 0]))
   const marketBarDate = new Map<string, string>(asOfDates.map((d) => [d, '']))
-  const skipped: Record<string, number> = {}
+  // Seed with the caller's universe-level exclusions (ST / listing age /
+  // code whitelist) so the report's 剔除 line matches the scan reports;
+  // kline-fetch-failed is added on top and cannot collide with those keys.
+  const skipped: Record<string, number> = { ...(args.universeSkipped ?? {}) }
   let stocksEvaluated = 0
   let lastBarDate: string | null = null
-  let done = 0
+  let processed = 0
 
-  for (const stock of stocks) {
+  const evaluateStock = async (stock: StockMeta): Promise<void> => {
     const bars = await acquireBars(stock)
+    processed++
+    if (processed % 200 === 0) log(`backtest progress: ${processed}/${stocks.length}`)
     if (bars === null) {
       skipped['kline-fetch-failed'] = (skipped['kline-fetch-failed'] ?? 0) + 1
-      continue
+      return
     }
     stocksEvaluated++
-    done++
-    if (done % 200 === 0) log(`backtest progress: ${done}/${stocks.length}`)
-    if (bars.length === 0) continue
+    if (bars.length === 0) return
     const tail = bars[bars.length - 1]!.date
     if (lastBarDate === null || tail > lastBarDate) lastBarDate = tail
     const idx = chainedIndex(bars)
@@ -369,6 +385,22 @@ export async function runBacktest(args: BacktestArgs): Promise<BacktestResult> {
     }
   }
 
+  const concurrency = Math.max(1, Math.floor(args.concurrency ?? 1))
+  const queue = [...stocks]
+  const work = async (): Promise<void> => {
+    for (;;) {
+      const stock = queue.shift()
+      if (stock === undefined) return
+      await evaluateStock(stock)
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, () => work()))
+  // Concurrency only shuffles hit insertion order; sort per date for
+  // deterministic reports regardless of worker interleaving.
+  for (const asOf of asOfDates) {
+    hits.get(asOf)!.sort((a, b) => a.code.localeCompare(b.code))
+  }
+
   const statFor = (asOf: string, horizon: number, dateHits: BacktestHit[]): BacktestHorizonStat => {
     const baseMedian = medianOf(baseline.get(asOf)!.get(horizon)!)
     const hitReturns: number[] = []
@@ -393,16 +425,18 @@ export async function runBacktest(args: BacktestArgs): Promise<BacktestResult> {
     }
   })
 
-  // Pool (date, hit) observations per horizon. Baseline for the pooled view is
-  // the median of per-date baseline medians (each date contributes equally,
-  // regardless of how many stocks were evaluable that day).
+  // Pool (date, hit) observations per horizon. Baseline for the pooled view
+  // pools the SAME (stock × date) observations flat — hitMedian and
+  // baselineMedian therefore aggregate at the same level, so excessMedian is
+  // a like-for-like difference (beatShare keeps its per-date conditioning).
   const pooled = horizons.map((horizon) => {
     const hitReturns: number[] = []
     const hitBeats: boolean[] = []
-    const baselineMedians: number[] = []
+    const flatBaseline: number[] = []
     for (const result of asOfResults) {
-      const baseMedian = medianOf(baseline.get(result.asOf)!.get(horizon)!)
-      if (baseMedian !== null) baselineMedians.push(baseMedian)
+      const dateBaseline = baseline.get(result.asOf)!.get(horizon)!
+      const baseMedian = medianOf(dateBaseline)
+      for (const value of dateBaseline) flatBaseline.push(value)
       for (const hit of result.hits) {
         const fr = hit.forward[String(horizon)]
         if (fr === null || fr === undefined) continue
@@ -410,13 +444,13 @@ export async function runBacktest(args: BacktestArgs): Promise<BacktestResult> {
         if (baseMedian !== null) hitBeats.push(fr > baseMedian)
       }
     }
-    return horizonStat(horizon, hitReturns, hitBeats, baselineMedians)
+    return horizonStat(horizon, hitReturns, hitBeats, flatBaseline)
   })
 
   const totalHits = asOfResults.reduce((sum, r) => sum + r.hits.length, 0)
   const notes = [
     `${totalHits} (date × stock) hit observations over ${asOfDates.length} as-of dates — the same stock hitting at adjacent dates yields correlated observations, not independent samples`,
-    `baseline = median forward return of evaluable stocks (≥ ${floor} bars) at each date; excess = hit median − baseline median`,
+    `baseline = median forward return of evaluable stocks (≥ ${floor} bars) at each date; excess = hit median − baseline median; pooled views aggregate hit and baseline observations at the same flat (stock × date) level`,
   ]
 
   return {
@@ -488,7 +522,7 @@ export function renderBacktestMarkdown(result: BacktestResult, maxDetailRows = 2
 
   lines.push('## 二、汇总 (全部时点合并)')
   lines.push('')
-  lines.push('| 窗口 | 观测数 | 命中中位 | P25–P75 | 基准中位(各日中位的中位) | 超额中位 | 跑赢基准 |')
+  lines.push('| 窗口 | 观测数 | 命中中位 | P25–P75 | 基准中位(合并口径) | 超额中位 | 跑赢基准 |')
   lines.push('|---|---|---|---|---|---|---|')
   for (const stat of result.pooled) {
     lines.push(
@@ -504,11 +538,11 @@ export function renderBacktestMarkdown(result: BacktestResult, maxDetailRows = 2
   if (allHits.length === 0) {
     lines.push('无。')
   } else {
-    lines.push(`| 时点 | 代码 | 名称 | 板块 | 时点收盘 | ${result.horizons.map((h) => `${h}日`).join(' | ')} |`)
-    lines.push(`|---|---|---|---|---|${result.horizons.map(() => '---').join('|')}|`)
+    lines.push(`| 时点 | 实际数据日 | 代码 | 名称 | 板块 | 时点收盘 | ${result.horizons.map((h) => `${h}日`).join(' | ')} |`)
+    lines.push(`|---|---|---|---|---|---|${result.horizons.map(() => '---').join('|')}|`)
     for (const hit of allHits.slice(0, maxDetailRows)) {
       const forwards = result.horizons.map((h) => spct(hit.forward[String(h)] ?? null)).join(' | ')
-      lines.push(`| ${hit.asOf} | ${hit.code} | ${hit.name} | ${hit.board} | ${num(hit.close, 2)} | ${forwards} |`)
+      lines.push(`| ${hit.asOf} | ${hit.asOfBarDate} | ${hit.code} | ${hit.name} | ${hit.board} | ${num(hit.close, 2)} | ${forwards} |`)
     }
   }
   lines.push('')
@@ -521,5 +555,9 @@ export function renderBacktestMarkdown(result: BacktestResult, maxDetailRows = 2
   lines.push('')
   lines.push('---')
   lines.push('⚠️ 回测 lite 仅供研究参考, 不构成投资建议。')
+  // The canonical disclaimer is shared with the JSON payload — render it in
+  // full so the two artifacts cannot drift apart silently.
+  lines.push('')
+  lines.push(result.disclaimer)
   return lines.join('\n')
 }
