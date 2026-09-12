@@ -20,6 +20,7 @@
     "cli": "node --import tsx/esm src/cli.ts",
     "sync": "node --import tsx/esm src/cli.ts sync",
     "scan": "node --import tsx/esm src/cli.ts scan",
+    "backtest": "node --import tsx/esm src/cli.ts backtest",
     "strategies": "node --import tsx/esm src/cli.ts strategies",
     "filters": "node --import tsx/esm src/cli.ts filters",
     "sources": "node --import tsx/esm src/cli.ts sources"

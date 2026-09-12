@@ -177,6 +177,7 @@ export const myStrategy = composeStrategy({
 pnpm install
 pnpm sync        # 每周一次: 增量同步本地行情缓存 (默认全市场; 用 --board / --codes 缩小范围)
 pnpm scan        # 选股: 生成分层报告 (严格命中 + 近邻候选)
+pnpm backtest    # 回测 lite: 历史时点评估策略, 前瞻收益 vs 同日基准 (先 pnpm sync)
 pnpm strategies  # 列出策略 id 及参数表
 pnpm filters     # 列出原子过滤器 id 及参数表
 pnpm sources     # 列出数据源 id
@@ -200,6 +201,21 @@ pnpm sources     # 列出数据源 id
 
 - **严格命中**: 该策略的全部闸门通过 (闸门数随策略而定, 见 `pnpm strategies`);
 - **近邻候选**: 只差一道闸的票, 每只标明各闸门的量化指标和卡在哪一道 —— 专为人工二次甄别设计 (严格条件常为 0 命中, 近邻层保证每次都有可甄别的候选)。
+
+### 回测 lite (`pnpm backtest`)
+
+回答"这套组合过去的命中到底表现如何": 沿历史每月一个时点回溯 (`--as-of` 锚点 + `--months` 步数), 每个时点**只用该时点之前的K线**评估策略 (无未来数据泄漏), 前瞻收益 (`--horizons 5,20,60` 交易日) 在链式收益率指数上度量, 并与同日全池基准中位数对比扣除大盘漂移。输出按时间点 × 窗口的命中/基准/超额/跑赢占比表 + 汇总 + 命中明细。K线回看窗口会自动加宽, 保证最老时点下方仍有完整的请求历史 (首次运行触发缓存回填)。
+
+```sh
+pnpm backtest --strategy low_flat_limit_up --months 12 --horizons 5,20,60
+pnpm backtest --predicate '{"all":["deep_drawdown","flat_base"]}' --params minDrawdownFromHigh=0.5
+```
+
+响亮的边界 (报告开头也声明):
+
+- **拒绝回测**需要行业聚合或市值快照的策略 —— 这些输入由当前数据算出, 注入历史时会泄入门内; 纯量价/逐bar成交额策略均可回测 (三个内置策略全部支持)。
+- **幸存者偏差**: 股票池为当前上市名单, 退市股缺失 → 结果系统性偏乐观; ST/上市天数为当前快照。
+- 同一股票相邻时点重复命中产生相关观测; 结论定位是**相对比较** (阈值 A vs B), 不是收益预测。
 
 ## 已知限制
 
