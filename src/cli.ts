@@ -3,6 +3,7 @@
  *
  *   pnpm sync         增量同步本地行情缓存 (每周一次; 全市场默认)
  *   pnpm scan         按策略扫描, 生成分层报告 (严格命中 + 近邻候选)
+ *   pnpm backtest     回测 lite: 历史时点评估策略, 命中池 vs 同日基准的前瞻收益对比
  *   pnpm strategies   列出可用策略与参数
  *   pnpm filters      列出可用原子过滤器与参数
  *   pnpm sources      列出可用数据源
@@ -13,6 +14,15 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parseArgs, type ParseArgsConfig } from 'node:util'
+import {
+  assertBacktestable,
+  historyBarsForBacktest,
+  monthlySteps,
+  parseHorizons,
+  renderBacktestMarkdown,
+  runBacktest,
+  type BacktestResult,
+} from './backtest.js'
 import { defaultCacheDir } from './cache.js'
 import { boardMemberCodes, findBoard, suggestBoards } from './datasources/boards.js'
 import { createDataSource, type DataSourceId } from './datasources/index.js'
@@ -35,7 +45,7 @@ import { registerAll } from './strategies/index.js'
 import { toPredicate } from './tool.js'
 import { composeStrategy } from './engine/compose.js'
 import type { IndustryStats } from './engine/types.js'
-import { barsToSeries, fromBarTuple, ymd } from './types.js'
+import { barsToSeries, fromBarTuple, ymd, type SeriesBar, type StockMeta } from './types.js'
 
 const SOURCE_NOTES: Record<DataSourceId, string> = {
   sina: '新浪 前复权日线 (推荐: 免费、单请求1023根、最新价≈市价)',
@@ -159,6 +169,7 @@ function printHelp(): void {
 用法:
   pnpm sync [选项]                 增量同步本地行情缓存 (每周一次)
   pnpm scan [选项]                 按策略扫描并生成分层报告
+  pnpm backtest [选项]             回测 lite: 历史时点评估策略, 前瞻收益 vs 同日基准
   pnpm strategies                  列出可用策略与参数
   pnpm filters                     列出可用原子过滤器与参数
   pnpm sources                     列出可用数据源
@@ -170,14 +181,22 @@ function printHelp(): void {
   --board <板块名>                   只扫东财板块成分 (如 核能核电 / 农林牧渔)
   --strategy <id>                    扫描策略 (默认 low_flat_limit_up)
   --params k=v,k2=v2                 覆盖策略参数
-  --top <n>                          近邻候选最多列 n 只 (默认 30)
+  --top <n>                          近邻候选最多列 n 只 (默认 30; 回测明细默认 200)
   --out <dir>                        报告输出目录 (默认 reports/)
   --cache-dir <dir>                  缓存目录 (默认 ~/.dsh/a-share-screener)
   --refresh                          强制刷新股票清单与K线
   --concurrency <n>                  并发请求数 (默认 12)
   --history-bars <n>                 K线回看窗口 (默认 800)
   --min-list-days <n>                剔除上市不足 n 天 (默认 365)
-  --max-list-days <n>                剔除上市超过 n 天 (默认 0 = 不限; 如 1460 ≈ 4年)`)
+  --max-list-days <n>                剔除上市超过 n 天 (默认 0 = 不限; 如 1460 ≈ 4年)
+
+回测选项 (backtest):
+  --as-of <YYYYMMDD>                 锚点时点 (默认今天), 向前每月一步
+  --months <n>                       时点数 (默认 12)
+  --horizons <a,b,c>                 前瞻窗口交易日数 (默认 5,20,60)
+  回测前先 pnpm sync; K线窗口会自动加宽保证最老时点下方历史完整 (首次触发回填);
+  需要行业聚合或市值快照的策略会被拒绝 (避免未来数据泄漏)`
+)
 }
 
 async function cmdSync(values: Record<string, unknown>): Promise<void> {
@@ -202,8 +221,8 @@ async function cmdSync(values: Record<string, unknown>): Promise<void> {
   if (skipped.length > 0) console.log(`剔除: ${skipped.map(([k, v]) => `${k} ${v}`).join(', ')}`)
 }
 
-async function cmdScan(values: Record<string, unknown>): Promise<void> {
-  const config = configFrom(values)
+/** Resolve the strategy (built-in id or ad-hoc --predicate) shared by scan and backtest. */
+function resolveStrategyForRun(values: Record<string, unknown>): { registry: StrategyRegistry; strategyId: string } {
   let registry = new StrategyRegistry()
   registerAll(registry)
   const predicateRaw = values.predicate as string | undefined
@@ -231,6 +250,12 @@ async function cmdScan(values: Record<string, unknown>): Promise<void> {
     registry = new StrategyRegistry()
     registry.register(custom)
   }
+  return { registry, strategyId }
+}
+
+async function cmdScan(values: Record<string, unknown>): Promise<void> {
+  const config = configFrom(values)
+  const { registry, strategyId } = resolveStrategyForRun(values)
   const strategy = registry.get(strategyId)
   if (strategy === undefined) {
     console.error(`未知策略 '${strategyId}'. 可用: ${registry.ids().join(', ')}`)
@@ -364,6 +389,92 @@ async function cmdSources(): Promise<void> {
   }
 }
 
+async function cmdBacktest(values: Record<string, unknown>): Promise<void> {
+  const config = configFrom(values)
+  const { registry, strategyId } = resolveStrategyForRun(values)
+  const strategy = registry.get(strategyId)
+  if (strategy === undefined) {
+    console.error(`未知策略 '${strategyId}'. 可用: ${registry.ids().join(', ')}`)
+    process.exit(2)
+  }
+  const params = registry.resolveParams(strategyId, parseParams(values.params as string | undefined))
+
+  const asOfAnchor = (values['as-of'] as string | undefined) ?? ymd(new Date())
+  // No silent flooring: monthlySteps itself rejects non-integer / out-of-range
+  // month counts with an actionable message.
+  const months = Number(values.months ?? 12)
+  const asOfDates = monthlySteps(asOfAnchor, months)
+  const horizons = parseHorizons(values.horizons as string | undefined)
+  // Widen the lookback so the oldest as-of still sits on the full requested
+  // history (otherwise old dates would evaluate over silently clamped windows).
+  const widenedBars = historyBarsForBacktest(config.historyBars, asOfDates[0]!, ymd(new Date()))
+  if (widenedBars > config.historyBars) {
+    config.historyBars = widenedBars
+    console.log(`回测窗口加宽: K线回看 ${config.historyBars} 根 (最老时点 ${asOfDates[0]} 之下仍需完整历史; 首次运行会回填缓存)`)
+  }
+
+  const limiter = new RateLimiter(config.requestsPerMinute)
+  const source = values.source as DataSourceId
+  if (!(source in SOURCE_NOTES)) {
+    console.error(`未知数据源 '${source}'. 可用: ${Object.keys(SOURCE_NOTES).join(', ')}`)
+    process.exit(2)
+  }
+  const dataSource = createDataSource(source, limiter)
+  assertCapabilities(strategy, dataSource)
+  assertBacktestable(strategy)
+  const { codes, label, slug } = await resolveScope(values, limiter, new AbortController().signal)
+  const signal = new AbortController().signal
+
+  const { stocks: filtered, skipped, today } = await prepareUniverse(config, dataSource, signal, values.refresh === true, (m) => console.warn(m))
+  const universe = filterByCodes(filtered, codes, skipped)
+  console.log(`范围 ${label} · 时点 ${asOfDates.length} 个 (${asOfDates[0]} → ${asOfDates[asOfDates.length - 1]}) · 前瞻窗口 ${horizons.join('/')} 交易日`)
+
+  const startDate = historyStartDate(config.historyBars)
+  const fetched = new Set<string>()
+  const acquireBars = async (stock: StockMeta): Promise<SeriesBar[] | null> => {
+    try {
+      const fileData = await acquireBarsFile(config, dataSource, stock, startDate, today, signal, fetched)
+      return barsToSeries(fileData.bars.map(fromBarTuple))
+    } catch (err) {
+      if (signal.aborted) throw abortError()
+      console.warn(`K线获取失败 ${stock.fullCode}: ${err instanceof Error ? err.message : String(err)}`)
+      return null
+    }
+  }
+
+  const result = await runBacktest({
+    strategy,
+    params,
+    stocks: universe,
+    asOfDates,
+    horizons,
+    acquireBars,
+    log: (message) => console.log(`[a-share-screener] ${message}`),
+    source: dataSource.id,
+    scope: label,
+  })
+
+  const failures = result.skipped['kline-fetch-failed'] ?? 0
+  if (failures > Math.max(10, Math.floor(universe.length * 0.1))) {
+    throw new Error(`K线获取失败 ${failures}/${universe.length} — 疑似数据源故障, 可换 --source 重试`)
+  }
+
+  const outDir = (values.out as string | undefined) ?? 'reports'
+  await mkdir(outDir, { recursive: true })
+  const base = `${ymd(new Date())}-backtest-${strategyId}-${slug}`
+  const top = Math.max(1, Math.floor(Number(values.top ?? 200)))
+  await writeFile(join(outDir, `${base}.md`), renderBacktestMarkdown(result, top), 'utf8')
+  await writeFile(join(outDir, `${base}.json`), JSON.stringify(result, null, 2), 'utf8')
+
+  console.log(`回测完成: ${label} · 数据源 ${dataSource.id} · 股票 ${result.stocksEvaluated} 只 · 命中观测 ${result.asOfResults.reduce((s, r) => s + r.hits.length, 0)}`)
+  for (const stat of result.pooled) {
+    const excess = stat.excessMedian === null ? '-' : `${stat.excessMedian >= 0 ? '+' : ''}${(stat.excessMedian * 100).toFixed(1)}%`
+    const beat = stat.beatShare === null ? '-' : `${(stat.beatShare * 100).toFixed(0)}%`
+    console.log(`  ${stat.horizon}日: 命中中位 ${stat.hitMedian === null ? '-' : (stat.hitMedian * 100).toFixed(1) + '%'} · 基准 ${stat.baselineMedian === null ? '-' : (stat.baselineMedian * 100).toFixed(1) + '%'} · 超额 ${excess} · 跑赢基准 ${beat}`)
+  }
+  console.log(`报告: ${join(outDir, `${base}.md`)} (+ .json)`)
+}
+
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2)
   switch (command) {
@@ -375,6 +486,21 @@ async function main(): Promise<void> {
     case 'scan': {
       const { values } = parseArgsSafe(args, { ...commonOptions(), strategy: { type: 'string' }, predicate: { type: 'string' }, params: { type: 'string' }, top: { type: 'string' }, out: { type: 'string' } })
       await cmdScan(values)
+      break
+    }
+    case 'backtest': {
+      const { values } = parseArgsSafe(args, {
+        ...commonOptions(),
+        strategy: { type: 'string' },
+        predicate: { type: 'string' },
+        params: { type: 'string' },
+        top: { type: 'string' },
+        out: { type: 'string' },
+        'as-of': { type: 'string' },
+        months: { type: 'string' },
+        horizons: { type: 'string' },
+      })
+      await cmdBacktest(values)
       break
     }
     case 'strategies':
@@ -391,7 +517,7 @@ async function main(): Promise<void> {
       printHelp()
       break
     default:
-      console.error(`未知命令 '${command}'. 可用: sync, scan, strategies, filters, sources, help`)
+      console.error(`未知命令 '${command}'. 可用: sync, scan, backtest, strategies, filters, sources, help`)
       process.exit(2)
   }
 }
