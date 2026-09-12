@@ -177,6 +177,7 @@ The same code ships a standalone command-line tool: manual trigger, local bar ca
 pnpm install
 pnpm sync        # incremental local cache sync (weekly); default full market, narrow with --board / --codes
 pnpm scan        # tiered report: strict hits + near-miss candidates, each with gate-level metrics
+pnpm backtest    # backtest-lite: as-of evaluation with forward returns vs same-date baseline (run sync first)
 pnpm strategies  # list strategy ids and their parameter tables
 pnpm filters     # list atomic filter ids and their parameter tables
 pnpm sources     # list data source ids
@@ -185,6 +186,21 @@ pnpm sources     # list data source ids
 Common options: `--source sina|eastmoney|tencent`, `--board <name>` (e.g. `--board 核能核电`), `--codes 600519,000858`, `--strategy <id>`, `--params k=v,k2=v2`, `--min-list-days <n>`, `--max-list-days <n>` (0 = no upper bound), `--cache-dir <dir>`, `--out <dir>`.
 
 `pnpm scan` writes `reports/<date>-<strategy>-<scope>.md` (+ `.json`). The near-miss tier (exactly one gate failed) exists because a strict multi-gate strategy frequently returns zero hits — it keeps every run reviewable.
+
+### Backtest-lite (`pnpm backtest`)
+
+Answers "how did this combination's hits actually perform": step back monthly through history (`--as-of` anchor + `--months`), evaluate the strategy at each date using ONLY the bars printed up to that date (no look-ahead), measure forward returns (`--horizons 5,20,60` trading bars) on the chained return index, and subtract market drift via the same-date universe baseline median. The report ships a per-(date × horizon) hits/baseline/excess/beat-share table, a pooled summary, and per-hit detail. The bar-lookback window widens automatically so the oldest as-of date still sits on the full requested history (the first run backfills the cache).
+
+```sh
+pnpm backtest --strategy low_flat_limit_up --months 12 --horizons 5,20,60
+pnpm backtest --predicate '{"all":["deep_drawdown","flat_base"]}' --params minDrawdownFromHigh=0.5
+```
+
+Loud limits (also stated at the top of every report):
+
+- Strategies needing **industry aggregation or a market-cap snapshot are REFUSED** — those inputs are computed from today's data and would leak into historical gates; price/volume (and per-bar amount) strategies all work (all three built-in strategies are supported).
+- **Survivorship bias**: the universe is today's listing, so delisted names are missing (results skew optimistic); ST/listing-age metadata are current snapshots.
+- The same stock hitting at adjacent dates yields correlated observations; the numbers are for **relative comparison** (threshold A vs B), not return forecasts.
 
 ## Limitations
 
